@@ -13,11 +13,10 @@ use reqwest::{Client, StatusCode};
 use rocket::http::hyper::Bytes;
 use rocket::response::Redirect;
 use rusoto_s3::{S3Client, S3};
-use slog::{o, Drain, Level, LevelFilter};
+use slog::{o, Drain};
 use slog_global::{info, warn};
 use std::sync::Arc;
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -48,6 +47,36 @@ async fn crates_io(path: PathBuf) -> Result<Redirect> {
         "crates.io_test",
         &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
         "https://static.crates.io",
+    )
+    .await
+}
+
+#[get("/flathub/<path..>")]
+async fn flathub(path: PathBuf) -> Result<Redirect> {
+    resolve_object(
+        "flathub",
+        &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
+        "https://dl.flathub.org/repo",
+    )
+    .await
+}
+
+#[get("/fedora-ostree/<path..>")]
+async fn fedora_ostree(path: PathBuf) -> Result<Redirect> {
+    resolve_object(
+        "fedora-ostree",
+        &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
+        "https://d2uk5hbyrobdzx.cloudfront.net",
+    )
+    .await
+}
+
+#[get("/pypi-packages/<path..>")]
+async fn pypi_packages(path: PathBuf) -> Result<Redirect> {
+    resolve_object(
+        "pypi-packages",
+        &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
+        "https://files.pythonhosted.org/packages",
     )
     .await
 }
@@ -136,11 +165,8 @@ async fn process_task(task: Task) -> Result<()> {
     info!("get {}, length={}", task.path, content_length);
     let stream = transform_stream(stream);
     let key = format!("{}/{}", task.storage, task.path);
-    let output = stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
-    info!(
-        "upload {} {} to bucket, {:?}",
-        task.storage, task.path, output
-    );
+    stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
+    info!("upload {} {} to bucket", task.storage, task.path);
     Ok(())
 }
 
@@ -177,5 +203,8 @@ async fn rocket() -> rocket::Rocket {
 
     tokio::spawn(async move { download_artifacts().await });
 
-    rocket::ignite().mount("/", routes![crates_io])
+    rocket::ignite().mount(
+        "/",
+        routes![crates_io, flathub, fedora_ostree, pypi_packages],
+    )
 }
