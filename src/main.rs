@@ -44,7 +44,7 @@ lazy_static! {
 #[get("/crates.io/<path..>")]
 async fn crates_io(path: PathBuf) -> Result<Redirect> {
     resolve_object(
-        "crates.io_test",
+        "crates.io",
         &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
         "https://static.crates.io",
     )
