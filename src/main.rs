@@ -14,8 +14,7 @@ use rocket::http::hyper::Bytes;
 use rocket::response::Redirect;
 use rusoto_s3::{S3Client, S3};
 use slog::{o, Drain, Level, LevelFilter};
-use slog_scope::{info, warn};
-use slog_scope_futures::FutureExt;
+use slog_global::{info, warn};
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -90,21 +89,34 @@ fn create_logger() -> slog::Logger {
 pub async fn stream_from_url(
     client: Client,
     url: &str,
-) -> Result<impl futures::Stream<Item = reqwest::Result<Bytes>>> {
+) -> Result<(u64, impl futures::Stream<Item = reqwest::Result<Bytes>>)> {
     let response = client.get(url).send().await?;
     let status = response.status();
     if !status.is_success() {
         return Err(Error::HTTPError(status));
     }
-    Ok(response.bytes_stream())
+    Ok((response.content_length().unwrap(), response.bytes_stream()))
 }
 
-pub async fn stream_to_s3(path: &str, stream: rusoto_s3::StreamingBody) -> Result<rusoto_s3::PutObjectOutput> {
-    let s3_client = S3Client::new(rusoto_core::Region::UsEast1);
+fn get_s3_client() -> S3Client {
+    S3Client::new(rusoto_core::Region::Custom {
+        name: "jCloud S3".to_string(),
+        endpoint: "https://s3.jcloud.sjtu.edu.cn".to_string(),
+    })
+}
+
+pub async fn stream_to_s3(
+    path: &str,
+    content_length: u64,
+    stream: rusoto_s3::StreamingBody,
+) -> Result<rusoto_s3::PutObjectOutput> {
+    let s3_client = get_s3_client();
+
     let mut req = rusoto_s3::PutObjectRequest::default();
     req.body = Some(stream);
     req.bucket = S3_BUCKET.to_string();
     req.key = path.to_string();
+    req.content_length = Some(content_length as i64);
     Ok(s3_client.put_object(req).await?)
 }
 
@@ -113,18 +125,22 @@ pub fn transform_stream(
 ) -> impl futures::Stream<Item = std::result::Result<Bytes, std::io::Error>> {
     stream.map(|x| {
         x.map_err(|err| {
-            println!("failed to receive data: {:?}", err);
+            warn!("failed to receive data: {:?}", err);
             std::io::Error::new(std::io::ErrorKind::Other, err)
         })
     })
 }
 
 async fn process_task(task: Task) -> Result<()> {
-    let stream = stream_from_url(CLIENT.clone(), &task.origin).await?;
+    let (content_length, stream) = stream_from_url(CLIENT.clone(), &task.origin).await?;
+    info!("get {}, length={}", task.path, content_length);
     let stream = transform_stream(stream);
     let key = format!("{}/{}", task.storage, task.path);
-    let output = stream_to_s3(&key, rusoto_s3::StreamingBody::new(stream)).await?;
-    println!("upload {} {} to bucket, {:?}", task.storage, task.path, output);
+    let output = stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
+    info!(
+        "upload {} {} to bucket, {:?}",
+        task.storage, task.path, output
+    );
     Ok(())
 }
 
@@ -136,24 +152,30 @@ async fn download_artifacts() {
         let permit = Arc::clone(&sem).acquire_owned().await;
         tokio::spawn(async move {
             let _permit = permit;
-            if let Err(err) = process_task(task)
-                .await
-            {
-                println!("{:?}", err);
+            if let Err(err) = process_task(task).await {
+                warn!("{:?}", err);
             }
         });
     }
 }
 
-#[launch]
-fn rocket() -> rocket::Rocket {
-    let _guard = slog_scope::set_global_logger(create_logger());
+async fn check_s3() {
+    let s3_client = get_s3_client();
+    let mut req = rusoto_s3::ListObjectsRequest::default();
+    req.bucket = S3_BUCKET.to_string();
+    s3_client.list_objects(req).await.unwrap();
+}
 
-    tokio::spawn(async move {
-        download_artifacts()
-            .with_logger(&slog_scope::logger())
-            .await
-    });
+#[launch]
+async fn rocket() -> rocket::Rocket {
+    let _guard = slog_global::set_global(create_logger());
+
+    info!("checking if bucket is available...");
+    // check if credentials are set and we have permissions
+    check_s3().await;
+    info!("starting server...");
+
+    tokio::spawn(async move { download_artifacts().await });
 
     rocket::ignite().mount("/", routes![crates_io])
 }

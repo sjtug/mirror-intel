@@ -887,8 +887,7 @@ dependencies = [
  "rusoto_s3",
  "slog",
  "slog-async",
- "slog-scope",
- "slog-scope-futures",
+ "slog-global",
  "slog-term",
  "thiserror",
  "tokio",
@@ -1647,24 +1646,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "slog-scope"
-version = "4.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c44c89dd8b0ae4537d1ae318353eaf7840b4869c536e31c41e963d1ea523ee6"
+name = "slog-global"
+version = "0.1.0"
+source = "git+https://github.com/breeswish/slog-global#d592f88e4dbba5eb439998463054f1a44fbf17b9"
 dependencies = [
  "arc-swap",
  "lazy_static",
+ "log",
  "slog",
-]
-
-[[package]]
-name = "slog-scope-futures"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0ad55b694ada4dc7097672e5a32fc16c35b183f9fa2531d17c7f07d25918eca"
-dependencies = [
- "slog",
- "slog-scope",
 ]
 
 [[package]]

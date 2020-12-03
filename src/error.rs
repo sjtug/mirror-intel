@@ -1,9 +1,9 @@
-use std::result;
 use std::io::Cursor;
+use std::result;
 
-use thiserror::Error;
-use rocket::response::{self, Responder, Response};
 use rocket::request::Request;
+use rocket::response::{self, Responder, Response};
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -20,7 +20,7 @@ pub enum Error {
     #[error("HTTP Error {0}")]
     HTTPError(reqwest::StatusCode),
     #[error("Put Object Error {0}")]
-    PutObjectError(#[from] rusoto_core::RusotoError<rusoto_s3::PutObjectError>)
+    PutObjectError(#[from] rusoto_core::RusotoError<rusoto_s3::PutObjectError>),
 }
 
 impl<'r> Responder<'r, 'static> for Error {
@@ -33,4 +33,3 @@ impl<'r> Responder<'r, 'static> for Error {
 }
 
 pub type Result<T> = result::Result<T, Error>;
-
