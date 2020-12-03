@@ -3,11 +3,11 @@ on:
     branches:
     - release
 
-name: Build
+name: Release
 
 jobs:
-  test:
-    name: Build
+  release:
+    name: Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
