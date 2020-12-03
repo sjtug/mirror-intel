@@ -1,0 +1,52 @@
+on:
+  push:
+    branches:
+    - release
+
+name: Build
+
+jobs:
+  test:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        name: Checkout 🛎️
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions-rs/toolchain@v1
+        name: Setup Cargo Toolchain 🛎️
+        with:
+          components: rustfmt, clippy
+          toolchain: nightly
+          default: true
+      - uses: actions-rs/cargo@v1
+        name: Compile all targets 🚀
+        with:
+          command: build
+          args: --workspace --release
+      - name: create tar
+        run: tar -cvzf mirror-intel.tar.gz -C target/release mirror-intel
+      - uses: actions/create-release@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: untagged-${{ github.sha }}
+          release_name: ${{ github.sha }} - ${{ github.event.head_commit.message }}
+          body: ${{ github.event.head_commit.message }}
+          draft: false
+          prerelease: true
+      - name: upload release (tar)
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: mirror-intel.tar.gz
+          asset_name: mirror-intel.tar.gz
+          asset_content_type: application/tar+gzip
