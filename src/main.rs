@@ -13,11 +13,10 @@ use reqwest::{Client, StatusCode};
 use rocket::http::hyper::Bytes;
 use rocket::response::Redirect;
 use rusoto_s3::{S3Client, S3};
-use slog::{o, Drain, Level, LevelFilter};
+use slog::{o, Drain};
 use slog_global::{info, warn};
 use std::sync::Arc;
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
