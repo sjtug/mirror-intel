@@ -52,6 +52,36 @@ async fn crates_io(path: PathBuf) -> Result<Redirect> {
     .await
 }
 
+#[get("/flathub/<path..>")]
+async fn flathub(path: PathBuf) -> Result<Redirect> {
+    resolve_object(
+        "flathub",
+        &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
+        "https://dl.flathub.org/repo",
+    )
+    .await
+}
+
+#[get("/fedora-ostree/<path..>")]
+async fn fedora_ostree(path: PathBuf) -> Result<Redirect> {
+    resolve_object(
+        "fedora-ostree",
+        &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
+        "https://d2uk5hbyrobdzx.cloudfront.net",
+    )
+    .await
+}
+
+#[get("/pypi-packages/<path..>")]
+async fn pypi_packages(path: PathBuf) -> Result<Redirect> {
+    resolve_object(
+        "pypi-packages",
+        &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
+        "https://files.pythonhosted.org/packages",
+    )
+    .await
+}
+
 async fn resolve_object(storage: &str, path: &str, origin: &str) -> Result<Redirect> {
     let s3 = format!(
         "https://s3.jcloud.sjtu.edu.cn/{}/{}/{}",
@@ -136,11 +166,8 @@ async fn process_task(task: Task) -> Result<()> {
     info!("get {}, length={}", task.path, content_length);
     let stream = transform_stream(stream);
     let key = format!("{}/{}", task.storage, task.path);
-    let output = stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
-    info!(
-        "upload {} {} to bucket, {:?}",
-        task.storage, task.path, output
-    );
+    stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
+    info!("upload {} {} to bucket", task.storage, task.path);
     Ok(())
 }
 
@@ -177,5 +204,8 @@ async fn rocket() -> rocket::Rocket {
 
     tokio::spawn(async move { download_artifacts().await });
 
-    rocket::ignite().mount("/", routes![crates_io])
+    rocket::ignite().mount(
+        "/",
+        routes![crates_io, flathub, fedora_ostree, pypi_packages],
+    )
 }
