@@ -1,0 +1,36 @@
+on:
+  push:
+    branches:
+    - master
+
+name: Build
+
+jobs:
+  test:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        name: Checkout 🛎️
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions-rs/toolchain@v1
+        name: Setup Cargo Toolchain 🛎️
+        with:
+          components: rustfmt, clippy
+          toolchain: nightly
+          default: true
+      - uses: actions-rs/cargo@v1
+        name: Compile all targets 🚀
+        with:
+          command: build
+          args: --workspace --release
+      - uses: actions/upload-artifact@v2
+        with:
+          name: mirror-intel-release
+          path: tartet/release/mirror-intel
