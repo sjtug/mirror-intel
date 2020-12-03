@@ -1,0 +1,36 @@
+use std::result;
+use std::io::Cursor;
+
+use thiserror::Error;
+use rocket::response::{self, Responder, Response};
+use rocket::request::Request;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Failed to decode path")]
+    DecodePathError(()),
+    #[error("{0}")]
+    CustomError(String),
+    #[error("Failed to send task to pending queue")]
+    SendError(()),
+    #[error("IO Error {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Reqwest Error {0}")]
+    Reqwest(#[from] reqwest::Error),
+    #[error("HTTP Error {0}")]
+    HTTPError(reqwest::StatusCode),
+    #[error("Put Object Error {0}")]
+    PutObjectError(#[from] rusoto_core::RusotoError<rusoto_s3::PutObjectError>)
+}
+
+impl<'r> Responder<'r, 'static> for Error {
+    fn respond_to(self, _: &'r Request<'_>) -> response::Result<'static> {
+        let fmt_str = format!("{:?}", self);
+        Response::build()
+            .sized_body(fmt_str.len(), Cursor::new(fmt_str))
+            .ok()
+    }
+}
+
+pub type Result<T> = result::Result<T, Error>;
+
