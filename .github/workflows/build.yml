@@ -33,4 +33,4 @@ jobs:
       - uses: actions/upload-artifact@v2
         with:
           name: mirror-intel-release
-          path: tartet/release/mirror-intel
+          path: target/release/mirror-intel
