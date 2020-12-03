@@ -33,6 +33,7 @@ jobs:
       - name: create tar
         run: tar -cvzf mirror-intel.tar.gz -C target/release mirror-intel
       - uses: actions/create-release@latest
+        id: create_release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
