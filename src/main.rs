@@ -9,28 +9,20 @@ mod utils;
 
 use artifacts::download_artifacts;
 use common::{IntelMission, MAX_PENDING_TASK};
-use error::{Error, Result};
+
 use repos::{
     crates_io, fedora_iot, fedora_ostree, flathub, homebrew_bottles, pypi_packages, rust_static,
 };
 use storage::check_s3;
 
-use std::path::PathBuf;
-
 #[macro_use]
 extern crate rocket;
 use futures_util::StreamExt;
-use reqwest::{Client, StatusCode};
-use rocket::http::hyper::Bytes;
-use rocket::response::Redirect;
-use rocket::State;
-use rusoto_s3::{S3Client, S3};
-use slog::{o, Drain};
-use std::pin::Pin;
-use std::sync::Arc;
+use reqwest::Client;
 
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::Semaphore;
+use slog::{o, Drain};
+
+use tokio::sync::mpsc::channel;
 
 fn create_logger() -> slog::Logger {
     let decorator = slog_term::TermDecorator::new().build();

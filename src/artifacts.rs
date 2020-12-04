@@ -1,23 +1,17 @@
+use crate::common::{Task, MAX_CONCURRENT_DOWNLOAD};
 use crate::error::{Error, Result};
 use crate::storage::stream_to_s3;
-use crate::common::{Task, MAX_CONCURRENT_DOWNLOAD};
-
-use std::path::PathBuf;
 
 use futures_util::StreamExt;
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use rocket::http::hyper::Bytes;
-use rocket::response::Redirect;
-use rocket::State;
-use rusoto_s3::{S3Client, S3};
-use slog::{o, Drain};
+
+use slog::Drain;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Semaphore;
-
-
 
 fn transform_stream(
     stream: impl futures::Stream<Item = reqwest::Result<Bytes>>,
@@ -29,8 +23,6 @@ fn transform_stream(
         })
     })
 }
-
-
 
 async fn process_task(task: Task, client: Client) -> Result<()> {
     let (content_length, stream) = stream_from_url(client, task.origin.clone()).await?;
@@ -87,4 +79,3 @@ pub async fn download_artifacts(mut rx: Receiver<Task>, client: Client) {
         });
     }
 }
-

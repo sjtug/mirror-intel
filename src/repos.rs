@@ -1,21 +1,11 @@
 use crate::common::IntelMission;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::utils::{decode_path, resolve_object, resolve_ostree};
 
 use std::path::PathBuf;
 
-use futures_util::StreamExt;
-use reqwest::{Client, StatusCode};
-use rocket::http::hyper::Bytes;
 use rocket::response::Redirect;
 use rocket::State;
-use rusoto_s3::{S3Client, S3};
-use slog::{o, Drain};
-use std::pin::Pin;
-use std::sync::Arc;
-
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::Semaphore;
 
 #[get("/crates.io/<path..>")]
 pub async fn crates_io(path: PathBuf, intel_mission: State<'_, IntelMission>) -> Result<Redirect> {

@@ -8,11 +8,10 @@ pub struct Task {
     pub path: String,
 }
 
-
 #[derive(Clone)]
 pub struct IntelMission {
     pub tx: Sender<Task>,
-    pub client: Client
+    pub client: Client,
 }
 
 pub const MAX_PENDING_TASK: usize = 1024 * 16;

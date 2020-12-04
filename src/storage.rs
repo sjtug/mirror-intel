@@ -1,22 +1,7 @@
-use crate::error::{Error, Result};
 use crate::common::S3_BUCKET;
+use crate::error::Result;
 
-use std::path::PathBuf;
-
-
-use futures_util::StreamExt;
-use reqwest::{Client, StatusCode};
-use rocket::http::hyper::Bytes;
-use rocket::response::Redirect;
-use rocket::State;
 use rusoto_s3::{S3Client, S3};
-use slog::{o, Drain};
-use std::pin::Pin;
-use std::sync::Arc;
-
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::Semaphore;
-
 
 fn get_s3_client() -> S3Client {
     S3Client::new(rusoto_core::Region::Custom {
@@ -39,8 +24,6 @@ pub async fn stream_to_s3(
     req.content_length = Some(content_length as i64);
     Ok(s3_client.put_object(req).await?)
 }
-
-
 
 pub async fn check_s3() {
     let s3_client = get_s3_client();
