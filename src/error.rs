@@ -9,8 +9,6 @@ use thiserror::Error;
 pub enum Error {
     #[error("Failed to decode path")]
     DecodePathError(()),
-    #[error("{0}")]
-    CustomError(String),
     #[error("Failed to send task to pending queue")]
     SendError(()),
     #[error("IO Error {0}")]
