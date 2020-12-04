@@ -28,8 +28,8 @@ pub struct Task {
     pub path: String,
 }
 
-const MAX_PENDING_TASK: usize = 1024;
-const MAX_CONCURRENT_DOWNLOAD: usize = 16;
+const MAX_PENDING_TASK: usize = 1024 * 16;
+const MAX_CONCURRENT_DOWNLOAD: usize = 512;
 
 const S3_BUCKET: &str = "899a892efef34b1b944a19981040f55b-oss01";
 
@@ -43,40 +43,83 @@ lazy_static! {
 
 #[get("/crates.io/<path..>")]
 async fn crates_io(path: PathBuf) -> Result<Redirect> {
-    resolve_object(
-        "crates.io",
-        &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
-        "https://static.crates.io",
-    )
-    .await
+    resolve_object("crates.io", decode_path(&path)?, "https://static.crates.io").await
+}
+
+fn resolve_ostree(origin: &str, path: &str) -> Option<Redirect> {
+    if path.starts_with("summary")
+        || path.starts_with("config")
+        || path.starts_with("summaries")
+        || path.starts_with("refs/")
+    {
+        return Some(Redirect::permanent(format!("{}/{}", origin, path)));
+    }
+    None
+}
+
+fn decode_path(path: &PathBuf) -> Result<&str> {
+    Ok(path.to_str().ok_or_else(|| Error::DecodePathError(()))?)
 }
 
 #[get("/flathub/<path..>")]
 async fn flathub(path: PathBuf) -> Result<Redirect> {
-    resolve_object(
-        "flathub",
-        &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
-        "https://dl.flathub.org/repo",
-    )
-    .await
+    let path = decode_path(&path)?;
+    let origin = "https://dl.flathub.org/repo";
+    if let Some(redir) = resolve_ostree(origin, path) {
+        return Ok(redir);
+    }
+    resolve_object("flathub", path, origin).await
 }
 
 #[get("/fedora-ostree/<path..>")]
 async fn fedora_ostree(path: PathBuf) -> Result<Redirect> {
-    resolve_object(
-        "fedora-ostree",
-        &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
-        "https://d2uk5hbyrobdzx.cloudfront.net",
-    )
-    .await
+    let path = decode_path(&path)?;
+    let origin = "https://d2uk5hbyrobdzx.cloudfront.net";
+    if let Some(redir) = resolve_ostree(origin, path) {
+        return Ok(redir);
+    }
+    resolve_object("fedora-ostree", path, origin).await
+}
+
+#[get("/fedora-iot/<path..>")]
+async fn fedora_iot(path: PathBuf) -> Result<Redirect> {
+    let path = decode_path(&path)?;
+    let origin = "https://d2ju0wfl996cmc.cloudfront.net";
+    if let Some(redir) = resolve_ostree(origin, path) {
+        return Ok(redir);
+    }
+    resolve_object("fedora-iot", path, origin).await
 }
 
 #[get("/pypi-packages/<path..>")]
 async fn pypi_packages(path: PathBuf) -> Result<Redirect> {
     resolve_object(
         "pypi-packages",
-        &path.to_str().ok_or_else(|| Error::DecodePathError(()))?,
-        "https://files.pythonhosted.org/packages",
+        decode_path(&path)?,
+        // "https://files.pythonhosted.org/packages",
+        "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages",
+    )
+    .await
+}
+
+#[get("/homebrew-bottles/<path..>")]
+async fn homebrew_bottles(path: PathBuf) -> Result<Redirect> {
+    resolve_object(
+        "homebrew-bottles",
+        decode_path(&path)?,
+        // "https://files.pythonhosted.org/packages",
+        "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/bottles",
+    )
+    .await
+}
+
+#[get("/npm-registry/<path..>")]
+async fn npm_registry(path: PathBuf) -> Result<Redirect> {
+    resolve_object(
+        "homebrew-bottles",
+        decode_path(&path)?,
+        // "https://files.pythonhosted.org/packages",
+        "https://registry.npmjs.org",
     )
     .await
 }
@@ -205,6 +248,14 @@ async fn rocket() -> rocket::Rocket {
 
     rocket::ignite().mount(
         "/",
-        routes![crates_io, flathub, fedora_ostree, pypi_packages],
+        routes![
+            crates_io,
+            flathub,
+            fedora_ostree,
+            fedora_iot,
+            pypi_packages,
+            homebrew_bottles,
+            npm_registry
+        ],
     )
 }
