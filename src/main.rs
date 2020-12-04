@@ -15,6 +15,7 @@ use rocket::response::Redirect;
 use rusoto_s3::{S3Client, S3};
 use slog::{o, Drain};
 use slog_global::{info, warn};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -169,14 +170,34 @@ fn create_logger() -> slog::Logger {
 
 pub async fn stream_from_url(
     client: Client,
-    url: &str,
-) -> Result<(u64, impl futures::Stream<Item = reqwest::Result<Bytes>>)> {
-    let response = client.get(url).send().await?;
+    url: String,
+) -> Result<(
+    u64,
+    Pin<
+        Box<
+            dyn futures::stream::Stream<Item = std::result::Result<Bytes, std::io::Error>>
+                + Sync
+                + Send,
+        >,
+    >,
+)> {
+    let response = client.get(&url).send().await?;
     let status = response.status();
     if !status.is_success() {
         return Err(Error::HTTPError(status));
     }
-    Ok((response.content_length().unwrap(), response.bytes_stream()))
+    if let Some(content_length) = response.content_length() {
+        Ok((
+            content_length,
+            Pin::from(Box::new(transform_stream(response.bytes_stream()))),
+        ))
+    } else {
+        let resp = response.bytes().await?;
+        Ok((
+            resp.len() as u64,
+            Pin::from(Box::new(futures::stream::iter(vec![resp]).map(|x| Ok(x)))),
+        ))
+    }
 }
 
 fn get_s3_client() -> S3Client {
@@ -213,9 +234,8 @@ pub fn transform_stream(
 }
 
 async fn process_task(task: Task) -> Result<()> {
-    let (content_length, stream) = stream_from_url(CLIENT.clone(), &task.origin).await?;
+    let (content_length, stream) = stream_from_url(CLIENT.clone(), task.origin.clone()).await?;
     info!("get {}, length={}", task.path, content_length);
-    let stream = transform_stream(stream);
     let key = format!("{}/{}", task.storage, task.path);
     stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
     info!("upload {} {} to bucket", task.storage, task.path);
