@@ -115,7 +115,7 @@ async fn homebrew_bottles(path: PathBuf) -> Result<Redirect> {
 
 #[get("/rust-static/<path..>")]
 async fn rust_static(path: PathBuf) -> Result<Redirect> {
-    let origin = "https://mirrors.sjtug.sjtu.edu.cn/rust-static";
+    let origin = "https://mirrors.tuna.tsinghua.edu.cn/rustup";
 
     if let Some(name) = path.file_name() {
         if let Some(name) = name.to_str() {
