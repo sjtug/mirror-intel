@@ -12,7 +12,7 @@ pub fn resolve_ostree(origin: &str, path: &str) -> Option<Redirect> {
         || path.starts_with("summaries")
         || path.starts_with("refs/")
     {
-        return Some(Redirect::permanent(format!("{}/{}", origin, path)));
+        return Some(Redirect::moved(format!("{}/{}", origin, path)));
     }
     None
 }
@@ -34,7 +34,7 @@ pub async fn resolve_object(
     let origin = format!("{}/{}", origin, path);
     if let Ok(resp) = mission.client.head(&s3).send().await {
         match resp.status() {
-            StatusCode::OK => return Ok(Redirect::temporary(s3)),
+            StatusCode::OK => return Ok(Redirect::found(s3)),
             StatusCode::FORBIDDEN => {
                 mission
                     .tx
@@ -50,5 +50,5 @@ pub async fn resolve_object(
             _ => {}
         }
     }
-    Ok(Redirect::temporary(origin))
+    Ok(Redirect::found(origin))
 }

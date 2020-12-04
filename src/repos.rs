@@ -91,7 +91,7 @@ pub async fn rust_static(
         if let Some(name) = name.to_str() {
             if name.starts_with("channel-") || name.ends_with(".toml") {
                 let path = decode_path(&path)?;
-                return Ok(Redirect::permanent(format!("{}/{}", origin, path)));
+                return Ok(Redirect::moved(format!("{}/{}", origin, path)));
             }
         }
     }
@@ -99,7 +99,7 @@ pub async fn rust_static(
     let path = decode_path(&path)?;
 
     if !path.starts_with("dist") && !path.starts_with("rustup") {
-        return Ok(Redirect::permanent(format!("{}/{}", origin, path)));
+        return Ok(Redirect::moved(format!("{}/{}", origin, path)));
     }
     resolve_object("rust-static", path, origin, &intel_mission).await
 }
