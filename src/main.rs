@@ -107,7 +107,6 @@ async fn homebrew_bottles(path: PathBuf) -> Result<Redirect> {
     resolve_object(
         "homebrew-bottles",
         decode_path(&path)?,
-        // "https://files.pythonhosted.org/packages",
         "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/bottles",
     )
     .await
@@ -118,10 +117,30 @@ async fn npm_registry(path: PathBuf) -> Result<Redirect> {
     resolve_object(
         "homebrew-bottles",
         decode_path(&path)?,
-        // "https://files.pythonhosted.org/packages",
         "https://registry.npmjs.org",
     )
     .await
+}
+
+#[get("/rust-static/<path..>")]
+async fn rust_static(path: PathBuf) -> Result<Redirect> {
+    let origin = "https://mirrors.sjtug.sjtu.edu.cn/rust-static";
+
+    if let Some(name) = path.file_name() {
+        if let Some(name) = name.to_str() {
+            if name.starts_with("channel-") || name.ends_with(".toml") {
+                let path = decode_path(&path)?;
+                return Ok(Redirect::permanent(format!("{}/{}", origin, path)));
+            }
+        }
+    }
+
+    let path = decode_path(&path)?;
+
+    if !path.starts_with("dist") && !path.starts_with("rustup") {
+        return Ok(Redirect::permanent(format!("{}/{}", origin, path)));
+    }
+    resolve_object("rust-static", path, origin).await
 }
 
 async fn resolve_object(storage: &str, path: &str, origin: &str) -> Result<Redirect> {
@@ -255,7 +274,8 @@ async fn rocket() -> rocket::Rocket {
             fedora_iot,
             pypi_packages,
             homebrew_bottles,
-            npm_registry
+            npm_registry,
+            rust_static
         ],
     )
 }
