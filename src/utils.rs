@@ -4,10 +4,7 @@ use crate::error::{Error, Result};
 use std::path::PathBuf;
 
 use reqwest::StatusCode;
-
 use rocket::response::Redirect;
-
-use slog::Drain;
 
 pub fn resolve_ostree(origin: &str, path: &str) -> Option<Redirect> {
     if path.starts_with("summary")

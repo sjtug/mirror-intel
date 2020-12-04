@@ -6,11 +6,10 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use rocket::http::hyper::Bytes;
 
-use slog::Drain;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::Semaphore;
 
 fn transform_stream(

@@ -17,7 +17,6 @@ use storage::check_s3;
 
 #[macro_use]
 extern crate rocket;
-use futures_util::StreamExt;
 use reqwest::Client;
 
 use slog::{o, Drain};
