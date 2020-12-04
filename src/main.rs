@@ -17,6 +17,7 @@ use storage::check_s3;
 
 #[macro_use]
 extern crate rocket;
+
 use reqwest::Client;
 
 use slog::{o, Drain};
@@ -33,9 +34,7 @@ fn create_logger() -> slog::Logger {
 
 #[launch]
 async fn rocket() -> rocket::Rocket {
-    slog_stdlog::init().unwrap();
-
-    let _guard = slog_global::set_global(create_logger());
+    let logger = create_logger();
 
     info!("checking if bucket is available...");
     // check if credentials are set and we have permissions
@@ -47,7 +46,7 @@ async fn rocket() -> rocket::Rocket {
 
     let mission = IntelMission { tx, client };
 
-    tokio::spawn(async move { download_artifacts(rx, Client::new()).await });
+    tokio::spawn(async move { download_artifacts(rx, Client::new(), logger).await });
 
     rocket::ignite().manage(mission).mount(
         "/",

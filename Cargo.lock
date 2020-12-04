@@ -880,7 +880,6 @@ dependencies = [
  "futures",
  "futures-util",
  "lazy_static",
- "log",
  "reqwest",
  "rocket",
  "rocket_codegen",
@@ -889,8 +888,6 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-envlogger",
- "slog-global",
- "slog-stdlog",
  "slog-term",
  "thiserror",
  "tokio",
@@ -1661,17 +1658,6 @@ dependencies = [
  "slog-scope",
  "slog-stdlog",
  "slog-term",
-]
-
-[[package]]
-name = "slog-global"
-version = "0.1.0"
-source = "git+https://github.com/breeswish/slog-global#d592f88e4dbba5eb439998463054f1a44fbf17b9"
-dependencies = [
- "arc-swap",
- "lazy_static",
- "log",
- "slog",
 ]
 
 [[package]]
