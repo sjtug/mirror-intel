@@ -29,7 +29,7 @@ pub struct Task {
 }
 
 const MAX_PENDING_TASK: usize = 1024 * 16;
-const MAX_CONCURRENT_DOWNLOAD: usize = 512;
+const MAX_CONCURRENT_DOWNLOAD: usize = 1024;
 
 const S3_BUCKET: &str = "899a892efef34b1b944a19981040f55b-oss01";
 
@@ -107,17 +107,7 @@ async fn homebrew_bottles(path: PathBuf) -> Result<Redirect> {
     resolve_object(
         "homebrew-bottles",
         decode_path(&path)?,
-        "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/bottles",
-    )
-    .await
-}
-
-#[get("/npm-registry/<path..>")]
-async fn npm_registry(path: PathBuf) -> Result<Redirect> {
-    resolve_object(
-        "homebrew-bottles",
-        decode_path(&path)?,
-        "https://registry.npmjs.org",
+        "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles",
     )
     .await
 }
@@ -274,7 +264,6 @@ async fn rocket() -> rocket::Rocket {
             fedora_iot,
             pypi_packages,
             homebrew_bottles,
-            npm_registry,
             rust_static
         ],
     )
