@@ -76,14 +76,14 @@ impl FileWrapper {
         logger: slog::Logger,
     ) -> Result<impl Stream<Item = IoResult>> {
         // remove file on disk, but we could still read it
-        let f = self.f.take().unwrap();
+        let mut f = self.f.take().unwrap();
         if let Err(err) = fs::remove_file(&self.path).await {
             warn!(
                 logger,
                 "failed to remove cache file: {:?} {:?}", err, self.path
             );
         }
-        self.as_mut().seek(std::io::SeekFrom::Start(0)).await?;
+        f.seek(std::io::SeekFrom::Start(0)).await?;
         Ok(codec::FramedRead::new(f, codec::BytesCodec::new()).map_ok(|bytes| bytes.freeze()))
     }
 }
