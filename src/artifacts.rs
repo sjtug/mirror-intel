@@ -224,3 +224,29 @@ pub async fn download_artifacts(
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempdir::TempDir;
+
+    use slog::Drain;
+
+    fn create_test_logger() -> slog::Logger {
+        let decorator = slog_term::TermDecorator::new().build();
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        let drain = slog_async::Async::new(drain).build().fuse();
+        slog::Logger::root(drain, o!())
+    }
+
+    #[tokio::test]
+    async fn test_overlay_file_create() {
+        let logger = create_test_logger();
+        let tmp_dir = TempDir::new("intel").unwrap();
+        let path = tmp_dir.path().join("test.bin");
+        let mut wrapper = FileWrapper::open(&path).await.unwrap();
+        wrapper.as_mut().write_all(b"233333333").await.unwrap();
+        let mut stream = wrapper.into_bytes_stream(logger).await.unwrap();
+        assert_eq!(&stream.next().await.unwrap().unwrap(), "233333333");
+    }
+}

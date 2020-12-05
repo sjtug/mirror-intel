@@ -38,3 +38,8 @@ jobs:
         with:
           command: check
           args: --workspace
+      - uses: actions-rs/cargo@v1
+        name: Running Tests 🚀
+        with:
+          command: test
+          args: --workspace

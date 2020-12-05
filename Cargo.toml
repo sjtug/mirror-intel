@@ -24,3 +24,6 @@ bytes = "0.6"
 slog-envlogger = "2.2"
 tokio-util = "0.3"
 serde = "1.0"
+
+[dev-dependencies]
+tempdir = "0.3"
