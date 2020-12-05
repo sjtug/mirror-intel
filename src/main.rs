@@ -44,9 +44,12 @@ async fn rocket() -> rocket::Rocket {
     let (tx, rx) = channel(MAX_PENDING_TASK);
     let client = Client::new();
 
-    let mission = IntelMission { tx, client };
+    let mission = IntelMission {
+        tx: tx.clone(),
+        client,
+    };
 
-    tokio::spawn(async move { download_artifacts(rx, Client::new(), logger).await });
+    tokio::spawn(async move { download_artifacts(rx, tx, Client::new(), logger).await });
 
     rocket::ignite().manage(mission).mount(
         "/",

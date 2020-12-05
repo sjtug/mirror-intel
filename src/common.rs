@@ -1,11 +1,12 @@
 use reqwest::Client;
 use tokio::sync::mpsc::Sender;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Task {
     pub storage: String,
     pub origin: String,
     pub path: String,
+    pub ttl: usize
 }
 
 #[derive(Clone)]
