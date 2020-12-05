@@ -128,10 +128,10 @@ async fn to_memory_stream(
 async fn process_task(task: Task, client: Client, logger: slog::Logger) -> Result<()> {
     let (content_length, stream) =
         stream_from_url(client, task.origin.clone(), logger.clone()).await?;
-    info!(logger, "get {}, length={}", task.path, content_length);
+    info!(logger, "get length={}", content_length);
     let key = format!("{}/{}", task.storage, task.path);
     stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
-    info!(logger, "upload {} {} to bucket", task.storage, task.path);
+    info!(logger, "upload to bucket");
     Ok(())
 }
 
