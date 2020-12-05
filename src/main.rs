@@ -9,10 +9,10 @@ mod utils;
 
 use artifacts::download_artifacts;
 use common::{Config, IntelMission};
-
 use repos::{
     crates_io, fedora_iot, fedora_ostree, flathub, homebrew_bottles, pypi_packages, rust_static,
 };
+use reqwest::header;
 use storage::check_s3;
 
 #[macro_use]
@@ -49,6 +49,14 @@ async fn rocket() -> rocket::Rocket {
 
     let (tx, rx) = channel(config.max_pending_task);
     let client = Client::new();
+
+    let mut headers = header::HeaderMap::new();
+    headers.insert(
+        header::USER_AGENT,
+        header::HeaderValue::from_static(
+            "User-Agent: mirror-intel on SJTUG siyuan (github.com/sjtug/mirror-intel)",
+        ),
+    );
 
     let mission = IntelMission {
         tx: tx.clone(),

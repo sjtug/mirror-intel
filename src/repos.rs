@@ -60,7 +60,7 @@ pub async fn pypi_packages(
         "pypi-packages",
         decode_path(&path)?,
         // "https://files.pythonhosted.org/packages",
-        "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages",
+        "https://mirrors.bfsu.edu.cn/pypi/web/packages",
         &intel_mission,
     )
     .await
@@ -74,7 +74,7 @@ pub async fn homebrew_bottles(
     resolve_object(
         "homebrew-bottles",
         decode_path(&path)?,
-        "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles",
+        "https://mirrors.bfsu.edu.cn/homebrew-bottles",
         &intel_mission,
     )
     .await
