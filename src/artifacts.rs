@@ -76,7 +76,9 @@ impl FileWrapper {
         logger: slog::Logger,
     ) -> Result<impl Stream<Item = IoResult>> {
         // remove file on disk, but we could still read it
-        let mut f = self.f.take().unwrap().into_inner();
+        let mut f = self.f.take().unwrap();
+        f.flush().await?;
+        let mut f = f.into_inner();
         if let Err(err) = fs::remove_file(&self.path).await {
             warn!(
                 logger,
