@@ -2,3 +2,13 @@
 address = "0.0.0.0"
 concurrent_download = 16
 max_pending_task = 16384
+user_agent = "mirror-intel / 0.1 (siyuan.internal.sjtug.org)"
+
+[default.endpoints]
+rustup = "https://mirrors.tuna.tsinghua.edu.cn/rustup"
+homebrew_bottles = "https://mirrors.bfsu.edu.cn/homebrew-bottles"
+pypi_packages = "https://mirrors.bfsu.edu.cn/pypi/web/packages"
+fedora_iot = "https://d2ju0wfl996cmc.cloudfront.net"
+fedora_ostree = "https://d2uk5hbyrobdzx.cloudfront.net"
+flathub = "https://dl.flathub.org/repo"
+crates_io = "https://static.crates.io"

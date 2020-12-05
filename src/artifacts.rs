@@ -1,4 +1,4 @@
-use crate::common::{Config, Task};
+use crate::common::{Config, Metrics, Task};
 use crate::error::{Error, Result};
 use crate::storage::stream_to_s3;
 
@@ -76,14 +76,14 @@ impl FileWrapper {
         logger: slog::Logger,
     ) -> Result<impl Stream<Item = IoResult>> {
         // remove file on disk, but we could still read it
-        let f = self.f.take().unwrap();
+        let mut f = self.f.take().unwrap();
         if let Err(err) = fs::remove_file(&self.path).await {
             warn!(
                 logger,
                 "failed to remove cache file: {:?} {:?}", err, self.path
             );
         }
-        self.as_mut().seek(std::io::SeekFrom::Start(0)).await?;
+        f.seek(std::io::SeekFrom::Start(0)).await?;
         Ok(codec::FramedRead::new(f, codec::BytesCodec::new()).map_ok(|bytes| bytes.freeze()))
     }
 }
@@ -128,10 +128,10 @@ async fn to_memory_stream(
 async fn process_task(task: Task, client: Client, logger: slog::Logger) -> Result<()> {
     let (content_length, stream) =
         stream_from_url(client, task.origin.clone(), logger.clone()).await?;
-    info!(logger, "get {}, length={}", task.path, content_length);
+    info!(logger, "get length={}", content_length);
     let key = format!("{}/{}", task.storage, task.path);
     stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
-    info!(logger, "upload {} {} to bucket", task.storage, task.path);
+    info!(logger, "upload to bucket");
     Ok(())
 }
 
@@ -177,10 +177,13 @@ pub async fn download_artifacts(
     client: Client,
     logger: slog::Logger,
     config: &Config,
+    metrics: Arc<Metrics>,
 ) {
     let sem = Arc::new(Semaphore::new(config.concurrent_download));
     let processing_task = Arc::new(Mutex::new(HashSet::<String>::new()));
     while let Some(task) = rx.recv().await {
+        metrics.task_in_queue.dec();
+
         let logger = logger.new(o!("storage" => task.storage.clone(), "origin" => task.origin.clone(), "path" => task.path.clone()));
 
         if task.ttl == 0 {
@@ -199,28 +202,64 @@ pub async fn download_artifacts(
         }
 
         info!(logger, "start download");
+        metrics.download_counter.inc();
+
         let permit = Arc::clone(&sem).acquire_owned().await;
         let client = client.clone();
         let mut tx = tx.clone();
         let processing_task = processing_task.clone();
+        let metrics = metrics.clone();
+
+        metrics.task_download.inc();
         tokio::spawn(async move {
             let _permit = permit;
             let mut task_new = task.clone();
 
+            info!(logger, "begin stream");
             if let Err(err) = process_task(task, client, logger.clone()).await {
                 warn!(logger, "{:?}, ttl={}", err, task_new.ttl);
                 task_new.ttl -= 1;
+                metrics.failed_download_counter.inc();
 
                 let mut processing_task = processing_task.lock().await;
                 processing_task.remove(&task_hash);
 
                 if !matches!(err, Error::HTTPError(_)) {
                     tx.send(task_new).await.unwrap();
+                    metrics.task_in_queue.inc();
                 }
             } else {
                 let mut processing_task = processing_task.lock().await;
                 processing_task.remove(&task_hash);
             }
+
+            metrics.task_download.dec();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempdir::TempDir;
+
+    use slog::Drain;
+
+    fn create_test_logger() -> slog::Logger {
+        let decorator = slog_term::TermDecorator::new().build();
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        let drain = slog_async::Async::new(drain).build().fuse();
+        slog::Logger::root(drain, o!())
+    }
+
+    #[tokio::test]
+    async fn test_overlay_file_create() {
+        let logger = create_test_logger();
+        let tmp_dir = TempDir::new("intel").unwrap();
+        let path = tmp_dir.path().join("test.bin");
+        let mut wrapper = FileWrapper::open(&path).await.unwrap();
+        wrapper.as_mut().write_all(b"233333333").await.unwrap();
+        let mut stream = wrapper.into_bytes_stream(logger).await.unwrap();
+        assert_eq!(&stream.next().await.unwrap().unwrap(), "233333333");
     }
 }
