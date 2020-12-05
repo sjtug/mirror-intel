@@ -21,7 +21,7 @@ extern crate rocket;
 use std::sync::Arc;
 
 use prometheus::{Encoder, TextEncoder};
-use reqwest::{header, Client};
+use reqwest::{Client, ClientBuilder};
 use rocket::State;
 use slog::{o, Drain};
 use tokio::sync::mpsc::channel;
@@ -61,13 +61,10 @@ async fn rocket() -> rocket::Rocket {
     info!("{:?}", config);
 
     let (tx, rx) = channel(config.max_pending_task);
-    let client = Client::new();
-
-    let mut headers = header::HeaderMap::new();
-    headers.insert(
-        header::USER_AGENT,
-        header::HeaderValue::from_str(&config.user_agent).unwrap(),
-    );
+    let client = ClientBuilder::new()
+        .user_agent(&config.user_agent)
+        .build()
+        .unwrap();
 
     let mission = IntelMission {
         tx: tx.clone(),
