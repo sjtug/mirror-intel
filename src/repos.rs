@@ -33,6 +33,7 @@ pub async fn fedora_ostree(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
 ) -> Result<Redirect> {
+    tokio::time::delay_for(std::time::Duration::from_millis(50)).await;
     let path = decode_path(&path)?;
     let origin = "https://d2uk5hbyrobdzx.cloudfront.net";
     if let Some(redir) = resolve_ostree(origin, path) {
@@ -43,6 +44,7 @@ pub async fn fedora_ostree(
 
 #[get("/fedora-iot/<path..>")]
 pub async fn fedora_iot(path: PathBuf, intel_mission: State<'_, IntelMission>) -> Result<Redirect> {
+    tokio::time::delay_for(std::time::Duration::from_millis(50)).await;
     let path = decode_path(&path)?;
     let origin = "https://d2ju0wfl996cmc.cloudfront.net";
     if let Some(redir) = resolve_ostree(origin, path) {
