@@ -182,7 +182,7 @@ pub async fn download_artifacts(
     let sem = Arc::new(Semaphore::new(config.concurrent_download));
     let processing_task = Arc::new(Mutex::new(HashSet::<String>::new()));
     while let Some(task) = rx.recv().await {
-        metrics.in_queue.dec();
+        metrics.task_in_queue.dec();
 
         let logger = logger.new(o!("storage" => task.storage.clone(), "origin" => task.origin.clone(), "path" => task.path.clone()));
 
@@ -209,25 +209,31 @@ pub async fn download_artifacts(
         let mut tx = tx.clone();
         let processing_task = processing_task.clone();
         let metrics = metrics.clone();
+
+        metrics.task_download.inc();
         tokio::spawn(async move {
             let _permit = permit;
             let mut task_new = task.clone();
 
+            info!(logger, "begin stream");
             if let Err(err) = process_task(task, client, logger.clone()).await {
                 warn!(logger, "{:?}, ttl={}", err, task_new.ttl);
                 task_new.ttl -= 1;
+                metrics.failed_download_counter.inc();
 
                 let mut processing_task = processing_task.lock().await;
                 processing_task.remove(&task_hash);
 
                 if !matches!(err, Error::HTTPError(_)) {
                     tx.send(task_new).await.unwrap();
-                    metrics.in_queue.inc();
+                    metrics.task_in_queue.inc();
                 }
             } else {
                 let mut processing_task = processing_task.lock().await;
                 processing_task.remove(&task_hash);
             }
+
+            metrics.task_download.dec();
         });
     }
 }

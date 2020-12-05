@@ -16,7 +16,8 @@ pub struct Metrics {
     pub resolve_counter: Counter,
     pub download_counter: Counter,
     pub failed_download_counter: Counter,
-    pub in_queue: Gauge,
+    pub task_in_queue: Gauge,
+    pub task_download: Gauge,
     pub registry: Registry,
 }
 
@@ -34,7 +35,9 @@ impl Metrics {
             "objects failed to download",
         ))
         .unwrap();
-        let in_queue = Gauge::with_opts(Opts::new("in_queue", "objects in queue")).unwrap();
+        let task_in_queue = Gauge::with_opts(Opts::new("task_in_queue", "tasks in queue")).unwrap();
+        let task_download =
+            Gauge::with_opts(Opts::new("task_download", "tasks processing")).unwrap();
 
         let registry = Registry::new();
         registry
@@ -47,13 +50,15 @@ impl Metrics {
             .register(Box::new(failed_download_counter.clone()))
             .unwrap();
 
-        registry.register(Box::new(in_queue.clone())).unwrap();
+        registry.register(Box::new(task_in_queue.clone())).unwrap();
+        registry.register(Box::new(task_download.clone())).unwrap();
 
         Self {
             registry,
             resolve_counter,
             download_counter,
-            in_queue,
+            task_in_queue,
+            task_download,
             failed_download_counter,
         }
     }

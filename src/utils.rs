@@ -38,7 +38,7 @@ pub async fn resolve_object(
         match resp.status() {
             StatusCode::OK => return Ok(Redirect::found(s3)),
             StatusCode::FORBIDDEN => {
-                mission.metrics.in_queue.inc();
+                mission.metrics.task_in_queue.inc();
                 mission
                     .tx
                     .clone()
