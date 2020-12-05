@@ -1,4 +1,4 @@
-use crate::common::{Config, Task};
+use crate::common::{Config, Metrics, Task};
 use crate::error::{Error, Result};
 use crate::storage::stream_to_s3;
 
@@ -177,10 +177,13 @@ pub async fn download_artifacts(
     client: Client,
     logger: slog::Logger,
     config: &Config,
+    metrics: Arc<Metrics>,
 ) {
     let sem = Arc::new(Semaphore::new(config.concurrent_download));
     let processing_task = Arc::new(Mutex::new(HashSet::<String>::new()));
     while let Some(task) = rx.recv().await {
+        metrics.in_queue.dec();
+
         let logger = logger.new(o!("storage" => task.storage.clone(), "origin" => task.origin.clone(), "path" => task.path.clone()));
 
         if task.ttl == 0 {
@@ -199,10 +202,13 @@ pub async fn download_artifacts(
         }
 
         info!(logger, "start download");
+        metrics.download_counter.inc();
+
         let permit = Arc::clone(&sem).acquire_owned().await;
         let client = client.clone();
         let mut tx = tx.clone();
         let processing_task = processing_task.clone();
+        let metrics = metrics.clone();
         tokio::spawn(async move {
             let _permit = permit;
             let mut task_new = task.clone();
@@ -216,6 +222,7 @@ pub async fn download_artifacts(
 
                 if !matches!(err, Error::HTTPError(_)) {
                     tx.send(task_new).await.unwrap();
+                    metrics.in_queue.inc();
                 }
             } else {
                 let mut processing_task = processing_task.lock().await;

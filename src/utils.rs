@@ -27,6 +27,8 @@ pub async fn resolve_object(
     origin: &str,
     mission: &IntelMission,
 ) -> Result<Redirect> {
+    mission.metrics.resolve_counter.inc();
+
     let s3 = format!(
         "https://s3.jcloud.sjtu.edu.cn/{}/{}/{}",
         S3_BUCKET, storage, path
@@ -36,6 +38,7 @@ pub async fn resolve_object(
         match resp.status() {
             StatusCode::OK => return Ok(Redirect::found(s3)),
             StatusCode::FORBIDDEN => {
+                mission.metrics.in_queue.inc();
                 mission
                     .tx
                     .clone()

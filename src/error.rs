@@ -19,6 +19,8 @@ pub enum Error {
     HTTPError(reqwest::StatusCode),
     #[error("Put Object Error {0}")]
     PutObjectError(#[from] rusoto_core::RusotoError<rusoto_s3::PutObjectError>),
+    #[error("{0}")]
+    CustomError(String),
 }
 
 impl<'r> Responder<'r, 'static> for Error {

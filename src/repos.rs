@@ -1,4 +1,4 @@
-use crate::common::IntelMission;
+use crate::common::{Config, IntelMission};
 use crate::error::Result;
 use crate::utils::{decode_path, resolve_object, resolve_ostree};
 
@@ -8,20 +8,28 @@ use rocket::response::Redirect;
 use rocket::State;
 
 #[get("/crates.io/<path..>")]
-pub async fn crates_io(path: PathBuf, intel_mission: State<'_, IntelMission>) -> Result<Redirect> {
+pub async fn crates_io(
+    path: PathBuf,
+    intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
+) -> Result<Redirect> {
     resolve_object(
         "crates.io",
         decode_path(&path)?,
-        "https://static.crates.io",
+        &config.endpoints.crates_io,
         &intel_mission,
     )
     .await
 }
 
 #[get("/flathub/<path..>")]
-pub async fn flathub(path: PathBuf, intel_mission: State<'_, IntelMission>) -> Result<Redirect> {
+pub async fn flathub(
+    path: PathBuf,
+    intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
+) -> Result<Redirect> {
     let path = decode_path(&path)?;
-    let origin = "https://dl.flathub.org/repo";
+    let origin = &config.endpoints.flathub;
     if let Some(redir) = resolve_ostree(origin, path) {
         return Ok(redir);
     }
@@ -32,9 +40,10 @@ pub async fn flathub(path: PathBuf, intel_mission: State<'_, IntelMission>) -> R
 pub async fn fedora_ostree(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
 ) -> Result<Redirect> {
     let path = decode_path(&path)?;
-    let origin = "https://d2uk5hbyrobdzx.cloudfront.net";
+    let origin = &config.endpoints.fedora_ostree;
     if let Some(redir) = resolve_ostree(origin, path) {
         return Ok(redir);
     }
@@ -42,9 +51,13 @@ pub async fn fedora_ostree(
 }
 
 #[get("/fedora-iot/<path..>")]
-pub async fn fedora_iot(path: PathBuf, intel_mission: State<'_, IntelMission>) -> Result<Redirect> {
+pub async fn fedora_iot(
+    path: PathBuf,
+    intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
+) -> Result<Redirect> {
     let path = decode_path(&path)?;
-    let origin = "https://d2ju0wfl996cmc.cloudfront.net";
+    let origin = &config.endpoints.fedora_iot;
     if let Some(redir) = resolve_ostree(origin, path) {
         return Ok(redir);
     }
@@ -55,12 +68,12 @@ pub async fn fedora_iot(path: PathBuf, intel_mission: State<'_, IntelMission>) -
 pub async fn pypi_packages(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
 ) -> Result<Redirect> {
     resolve_object(
         "pypi-packages",
         decode_path(&path)?,
-        // "https://files.pythonhosted.org/packages",
-        "https://mirrors.bfsu.edu.cn/pypi/web/packages",
+        &config.endpoints.pypi_packages,
         &intel_mission,
     )
     .await
@@ -70,11 +83,12 @@ pub async fn pypi_packages(
 pub async fn homebrew_bottles(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
 ) -> Result<Redirect> {
     resolve_object(
         "homebrew-bottles",
         decode_path(&path)?,
-        "https://mirrors.bfsu.edu.cn/homebrew-bottles",
+        &config.endpoints.homebrew_bottles,
         &intel_mission,
     )
     .await
@@ -84,8 +98,9 @@ pub async fn homebrew_bottles(
 pub async fn rust_static(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
 ) -> Result<Redirect> {
-    let origin = "https://mirrors.tuna.tsinghua.edu.cn/rustup";
+    let origin = &config.endpoints.rustup;
 
     if let Some(name) = path.file_name() {
         if let Some(name) = name.to_str() {
