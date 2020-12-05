@@ -1,4 +1,4 @@
-use crate::common::{Task, MAX_CONCURRENT_DOWNLOAD};
+use crate::common::{Config, Task};
 use crate::error::{Error, Result};
 use crate::storage::stream_to_s3;
 
@@ -176,8 +176,9 @@ pub async fn download_artifacts(
     tx: Sender<Task>,
     client: Client,
     logger: slog::Logger,
+    config: &Config,
 ) {
-    let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_DOWNLOAD));
+    let sem = Arc::new(Semaphore::new(config.concurrent_download));
     let processing_task = Arc::new(Mutex::new(HashSet::<String>::new()));
     while let Some(task) = rx.recv().await {
         let logger = logger.new(o!("storage" => task.storage.clone(), "origin" => task.origin.clone(), "path" => task.path.clone()));

@@ -43,7 +43,7 @@ pub async fn resolve_object(
                         storage: storage.to_string(),
                         path: path.to_string(),
                         origin: origin.to_string(),
-                        ttl: 3
+                        ttl: 3,
                     })
                     .await
                     .map_err(|_| Error::SendError(()))?;
