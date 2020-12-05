@@ -1,3 +1,4 @@
 [default]
 address = "0.0.0.0"
-
+concurrent_download = 16
+max_pending_task = 16384

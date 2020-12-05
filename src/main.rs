@@ -8,7 +8,7 @@ mod storage;
 mod utils;
 
 use artifacts::download_artifacts;
-use common::{IntelMission, MAX_PENDING_TASK};
+use common::{Config, IntelMission};
 
 use repos::{
     crates_io, fedora_iot, fedora_ostree, flathub, homebrew_bottles, pypi_packages, rust_static,
@@ -41,14 +41,23 @@ async fn rocket() -> rocket::Rocket {
     check_s3().await;
     info!("starting server...");
 
-    let (tx, rx) = channel(MAX_PENDING_TASK);
+    let rocket = rocket::ignite();
+    let figment = rocket.figment();
+    let config: Config = figment.extract().expect("config");
+
+    info!("{:?}", config);
+
+    let (tx, rx) = channel(config.max_pending_task);
     let client = Client::new();
 
-    let mission = IntelMission { tx, client };
+    let mission = IntelMission {
+        tx: tx.clone(),
+        client,
+    };
 
-    tokio::spawn(async move { download_artifacts(rx, Client::new(), logger).await });
+    tokio::spawn(async move { download_artifacts(rx, tx, Client::new(), logger, &config).await });
 
-    rocket::ignite().manage(mission).mount(
+    rocket.manage(mission).mount(
         "/",
         routes![
             crates_io,

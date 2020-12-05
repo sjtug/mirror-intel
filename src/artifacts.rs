@@ -1,4 +1,4 @@
-use crate::common::{Task, MAX_CONCURRENT_DOWNLOAD};
+use crate::common::{Config, Task};
 use crate::error::{Error, Result};
 use crate::storage::stream_to_s3;
 
@@ -6,6 +6,7 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use rocket::http::hyper::Bytes;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -14,7 +15,8 @@ use futures::{Stream, TryStreamExt};
 use std::sync::atomic::AtomicUsize;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio_util::codec;
 
@@ -38,20 +40,34 @@ static FILE_ID: AtomicUsize = AtomicUsize::new(0);
 
 struct FileWrapper {
     path: PathBuf,
-    pub f: File,
+    pub f: Option<File>,
+}
+
+impl AsMut<File> for FileWrapper {
+    fn as_mut(&mut self) -> &mut File {
+        self.f.as_mut().unwrap()
+    }
+}
+
+impl AsRef<File> for FileWrapper {
+    fn as_ref(&self) -> &File {
+        self.f.as_ref().unwrap()
+    }
 }
 
 impl FileWrapper {
     async fn open(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
             path: path.as_ref().to_path_buf(),
-            f: OpenOptions::default()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .read(true)
-                .open(path)
-                .await?,
+            f: Some(
+                OpenOptions::default()
+                    .create(true)
+                    .truncate(true)
+                    .write(true)
+                    .read(true)
+                    .open(path)
+                    .await?,
+            ),
         })
     }
 
@@ -60,14 +76,24 @@ impl FileWrapper {
         logger: slog::Logger,
     ) -> Result<impl Stream<Item = IoResult>> {
         // remove file on disk, but we could still read it
+        let f = self.f.take().unwrap();
         if let Err(err) = fs::remove_file(&self.path).await {
             warn!(
                 logger,
                 "failed to remove cache file: {:?} {:?}", err, self.path
             );
         }
-        self.f.seek(std::io::SeekFrom::Start(0)).await?;
-        Ok(codec::FramedRead::new(self.f, codec::BytesCodec::new()).map_ok(|bytes| bytes.freeze()))
+        self.as_mut().seek(std::io::SeekFrom::Start(0)).await?;
+        Ok(codec::FramedRead::new(f, codec::BytesCodec::new()).map_ok(|bytes| bytes.freeze()))
+    }
+}
+
+impl Drop for FileWrapper {
+    fn drop(&mut self) {
+        if let Some(f) = self.f.take() {
+            drop(f);
+            std::fs::remove_file(&self.path).ok();
+        }
     }
 }
 
@@ -82,7 +108,7 @@ async fn to_file_stream(
     let mut file = FileWrapper::open(&path).await?;
     while let Some(v) = stream.next().await {
         let v = v?;
-        file.f.write_all(&v).await?;
+        file.as_mut().write_all(&v).await?;
     }
     Ok(file.into_bytes_stream(logger).await?)
 }
@@ -145,17 +171,55 @@ async fn stream_from_url(
     }
 }
 
-pub async fn download_artifacts(mut rx: Receiver<Task>, client: Client, logger: slog::Logger) {
-    let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_DOWNLOAD));
+pub async fn download_artifacts(
+    mut rx: Receiver<Task>,
+    tx: Sender<Task>,
+    client: Client,
+    logger: slog::Logger,
+    config: &Config,
+) {
+    let sem = Arc::new(Semaphore::new(config.concurrent_download));
+    let processing_task = Arc::new(Mutex::new(HashSet::<String>::new()));
     while let Some(task) = rx.recv().await {
         let logger = logger.new(o!("storage" => task.storage.clone(), "origin" => task.origin.clone(), "path" => task.path.clone()));
+
+        if task.ttl == 0 {
+            continue;
+        }
+
+        let task_hash = format!("{}/{}", task.origin, task.path);
+
+        {
+            let mut processing_task = processing_task.lock().await;
+            if processing_task.contains(&task_hash) {
+                info!(logger, "already processing, continue to next task");
+                continue;
+            }
+            processing_task.insert(task_hash.clone());
+        }
+
         info!(logger, "start download");
         let permit = Arc::clone(&sem).acquire_owned().await;
         let client = client.clone();
+        let mut tx = tx.clone();
+        let processing_task = processing_task.clone();
         tokio::spawn(async move {
             let _permit = permit;
+            let mut task_new = task.clone();
+
             if let Err(err) = process_task(task, client, logger.clone()).await {
-                warn!(logger, "{:?}", err);
+                warn!(logger, "{:?}, ttl={}", err, task_new.ttl);
+                task_new.ttl -= 1;
+
+                let mut processing_task = processing_task.lock().await;
+                processing_task.remove(&task_hash);
+
+                if !matches!(err, Error::HTTPError(_)) {
+                    tx.send(task_new).await.unwrap();
+                }
+            } else {
+                let mut processing_task = processing_task.lock().await;
+                processing_task.remove(&task_hash);
             }
         });
     }

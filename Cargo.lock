@@ -885,6 +885,7 @@ dependencies = [
  "rocket_codegen",
  "rusoto_core",
  "rusoto_s3",
+ "serde",
  "slog",
  "slog-async",
  "slog-envlogger",
