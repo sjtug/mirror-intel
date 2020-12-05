@@ -106,7 +106,11 @@ pub async fn rust_static(
         if let Some(name) = name.to_str() {
             if name.starts_with("channel-") || name.ends_with(".toml") {
                 let path = decode_path(&path)?;
-                return Ok(Redirect::moved(format!("{}/{}", origin, path)));
+                // mirrors.tuna will rewrite channel toml, and would make rustup to redirect to TUNA.
+                return Ok(Redirect::moved(format!(
+                    "https://static.rust-lang.org/{}",
+                    path
+                )));
             }
         }
     }
