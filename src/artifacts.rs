@@ -221,8 +221,10 @@ pub async fn download_artifacts(
                 task_new.ttl -= 1;
                 metrics.failed_download_counter.inc();
 
-                let mut processing_task = processing_task.lock().await;
-                processing_task.remove(&task_hash);
+                {
+                    let mut processing_task = processing_task.lock().await;
+                    processing_task.remove(&task_hash);
+                }
 
                 if !matches!(err, Error::HTTPError(_)) {
                     tx.send(task_new).await.unwrap();
