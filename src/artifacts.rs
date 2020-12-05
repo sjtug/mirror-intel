@@ -13,7 +13,7 @@ use std::sync::Arc;
 use futures::{Stream, TryStreamExt};
 use std::sync::atomic::AtomicUsize;
 use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{AsyncRead, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::Semaphore;
 use tokio_util::codec;
@@ -55,8 +55,17 @@ impl FileWrapper {
         })
     }
 
-    async fn into_bytes_stream(mut self) -> Result<impl Stream<Item = IoResult>> {
-        fs::remove_file(&self.path).await.ok(); // remove file on disk, but we could still read it
+    async fn into_bytes_stream(
+        mut self,
+        logger: slog::Logger,
+    ) -> Result<impl Stream<Item = IoResult>> {
+        // remove file on disk, but we could still read it
+        if let Err(err) = fs::remove_file(&self.path).await {
+            warn!(
+                logger,
+                "failed to remove cache file: {:?} {:?}", err, self.path
+            );
+        }
         self.f.seek(std::io::SeekFrom::Start(0)).await?;
         Ok(codec::FramedRead::new(self.f, codec::BytesCodec::new()).map_ok(|bytes| bytes.freeze()))
     }
@@ -64,6 +73,7 @@ impl FileWrapper {
 
 async fn to_file_stream(
     mut stream: impl Stream<Item = IoResult> + Unpin,
+    logger: slog::Logger,
 ) -> Result<impl Stream<Item = IoResult>> {
     let path = format!(
         "/mnt/cache/{}",
@@ -74,7 +84,7 @@ async fn to_file_stream(
         let v = v?;
         file.f.write_all(&v).await?;
     }
-    Ok(file.into_bytes_stream().await?)
+    Ok(file.into_bytes_stream(logger).await?)
 }
 
 async fn to_memory_stream(
@@ -112,8 +122,8 @@ async fn stream_from_url(
     if let Some(content_length) = response.content_length() {
         if content_length > 40 * 1024 * 1024 {
             info!(logger, "stream mode: file backend");
-            let stream = transform_stream(response.bytes_stream(), logger);
-            let stream = to_file_stream(stream).await?;
+            let stream = transform_stream(response.bytes_stream(), logger.clone());
+            let stream = to_file_stream(stream, logger).await?;
             Ok((content_length, Box::pin(stream)))
         } else if content_length > 1024 * 1024 {
             info!(logger, "stream mode: memory cache");
