@@ -15,6 +15,6 @@ pub struct IntelMission {
 }
 
 pub const MAX_PENDING_TASK: usize = 1024 * 16;
-pub const MAX_CONCURRENT_DOWNLOAD: usize = 1024;
+pub const MAX_CONCURRENT_DOWNLOAD: usize = 256;
 
 pub const S3_BUCKET: &str = "899a892efef34b1b944a19981040f55b-oss01";

@@ -891,6 +891,7 @@ dependencies = [
  "slog-term",
  "thiserror",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
