@@ -21,6 +21,8 @@ pub enum Error {
     PutObjectError(#[from] rusoto_core::RusotoError<rusoto_s3::PutObjectError>),
     #[error("{0}")]
     CustomError(String),
+    #[error("Too Large")]
+    TooLarge(()),
 }
 
 impl<'r> Responder<'r, 'static> for Error {

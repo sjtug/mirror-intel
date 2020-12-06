@@ -70,13 +70,18 @@ pub async fn pypi_packages(
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
 ) -> Result<Redirect> {
-    resolve_object(
-        "pypi-packages",
-        decode_path(&path)?,
-        &config.endpoints.pypi_packages,
-        &intel_mission,
-    )
-    .await
+    let origin = &config.endpoints.pypi_packages;
+    if let Some(name) = path.file_name() {
+        if let Some(name) = name.to_str() {
+            if name.contains("-py2") && !name.contains("py3") {
+                // ignore python2 only packages
+                let path = decode_path(&path)?;
+                return Ok(Redirect::moved(format!("{}/{}", origin, path)));
+            }
+        }
+    }
+
+    resolve_object("pypi-packages", decode_path(&path)?, origin, &intel_mission).await
 }
 
 #[get("/homebrew-bottles/<path..>")]

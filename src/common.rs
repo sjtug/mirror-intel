@@ -88,6 +88,8 @@ pub struct Config {
     pub concurrent_download: usize,
     pub endpoints: Endpoints,
     pub user_agent: String,
+    pub file_threshold_mb: u64,
+    pub ignore_threshold_mb: u64,
 }
 
 pub const S3_BUCKET: &str = "899a892efef34b1b944a19981040f55b-oss01";

@@ -130,9 +130,14 @@ async fn to_memory_stream(
     Ok(futures::stream::iter(vec![Ok(Bytes::from(result))]))
 }
 
-async fn process_task(task: Task, client: Client, logger: slog::Logger) -> Result<()> {
+async fn process_task(
+    task: Task,
+    client: Client,
+    config: &Config,
+    logger: slog::Logger,
+) -> Result<()> {
     let (content_length, stream) =
-        stream_from_url(client, task.origin.clone(), logger.clone()).await?;
+        stream_from_url(client, task.origin.clone(), config, logger.clone()).await?;
     info!(logger, "get length={}", content_length);
     let key = format!("{}/{}", task.storage, task.path);
     stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
@@ -143,6 +148,7 @@ async fn process_task(task: Task, client: Client, logger: slog::Logger) -> Resul
 async fn stream_from_url(
     client: Client,
     url: String,
+    config: &Config,
     logger: slog::Logger,
 ) -> Result<(u64, Pin<Box<dyn Stream<Item = IoResult> + Sync + Send>>)> {
     let response = client.get(&url).send().await?;
@@ -151,7 +157,9 @@ async fn stream_from_url(
         return Err(Error::HTTPError(status));
     }
     if let Some(content_length) = response.content_length() {
-        if content_length > 40 * 1024 * 1024 {
+        if content_length > config.ignore_threshold_mb * 1024 * 1024 {
+            return Err(Error::TooLarge(()));
+        } else if content_length > config.file_threshold_mb * 1024 * 1024 {
             info!(logger, "stream mode: file backend");
             let stream = transform_stream(response.bytes_stream(), logger.clone());
             let stream = to_file_stream(stream, logger).await?;
@@ -186,6 +194,7 @@ pub async fn download_artifacts(
     let sem = Arc::new(Semaphore::new(config.concurrent_download));
     let processing_task = Arc::new(Mutex::new(HashSet::<String>::new()));
     let (fail_tx, mut fail_rx) = unbounded_channel();
+    let config = Arc::new(config.clone());
 
     loop {
         let task: Task;
@@ -221,6 +230,7 @@ pub async fn download_artifacts(
         let processing_task = processing_task.clone();
         let metrics = metrics.clone();
         let fail_tx = fail_tx.clone();
+        let config = config.clone();
 
         metrics.task_download.inc();
         tokio::spawn(async move {
@@ -228,7 +238,7 @@ pub async fn download_artifacts(
             let mut task_new = task.clone();
 
             info!(logger, "begin stream");
-            if let Err(err) = process_task(task, client, logger.clone()).await {
+            if let Err(err) = process_task(task, client, &config, logger.clone()).await {
                 warn!(logger, "{:?}, ttl={}", err, task_new.ttl);
                 task_new.ttl -= 1;
                 metrics.failed_download_counter.inc();
@@ -238,7 +248,7 @@ pub async fn download_artifacts(
                     processing_task.remove(&task_hash);
                 }
 
-                if !matches!(err, Error::HTTPError(_)) {
+                if !matches!(err, Error::HTTPError(_)) && !matches!(err, Error::TooLarge(_)) {
                     fail_tx.send(task_new).unwrap();
                     metrics.task_in_queue.inc();
                 }
