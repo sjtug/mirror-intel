@@ -14,7 +14,7 @@ use std::sync::Arc;
 use futures::{Stream, TryStreamExt};
 use std::sync::atomic::AtomicUsize;
 use tokio::fs::{self, File, OpenOptions};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -40,17 +40,17 @@ static FILE_ID: AtomicUsize = AtomicUsize::new(0);
 
 struct FileWrapper {
     path: PathBuf,
-    pub f: Option<File>,
+    pub f: Option<BufWriter<File>>,
 }
 
-impl AsMut<File> for FileWrapper {
-    fn as_mut(&mut self) -> &mut File {
+impl AsMut<BufWriter<File>> for FileWrapper {
+    fn as_mut(&mut self) -> &mut BufWriter<File> {
         self.f.as_mut().unwrap()
     }
 }
 
-impl AsRef<File> for FileWrapper {
-    fn as_ref(&self) -> &File {
+impl AsRef<BufWriter<File>> for FileWrapper {
+    fn as_ref(&self) -> &BufWriter<File> {
         self.f.as_ref().unwrap()
     }
 }
@@ -59,7 +59,7 @@ impl FileWrapper {
     async fn open(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
             path: path.as_ref().to_path_buf(),
-            f: Some(
+            f: Some(BufWriter::new(
                 OpenOptions::default()
                     .create(true)
                     .truncate(true)
@@ -67,7 +67,7 @@ impl FileWrapper {
                     .read(true)
                     .open(path)
                     .await?,
-            ),
+            )),
         })
     }
 
@@ -77,6 +77,8 @@ impl FileWrapper {
     ) -> Result<impl Stream<Item = IoResult>> {
         // remove file on disk, but we could still read it
         let mut f = self.f.take().unwrap();
+        f.flush().await?;
+        let mut f = f.into_inner();
         if let Err(err) = fs::remove_file(&self.path).await {
             warn!(
                 logger,
@@ -84,7 +86,10 @@ impl FileWrapper {
             );
         }
         f.seek(std::io::SeekFrom::Start(0)).await?;
-        Ok(codec::FramedRead::new(f, codec::BytesCodec::new()).map_ok(|bytes| bytes.freeze()))
+        Ok(
+            codec::FramedRead::new(BufReader::new(f), codec::BytesCodec::new())
+                .map_ok(|bytes| bytes.freeze()),
+        )
     }
 }
 
