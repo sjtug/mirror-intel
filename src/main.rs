@@ -67,7 +67,7 @@ async fn rocket() -> rocket::Rocket {
         .unwrap();
 
     let mission = IntelMission {
-        tx: tx.clone(),
+        tx,
         client,
         metrics: Arc::new(Metrics::new()),
     };
@@ -77,7 +77,6 @@ async fn rocket() -> rocket::Rocket {
     tokio::spawn(async move {
         download_artifacts(
             rx,
-            tx,
             Client::new(),
             logger,
             &config_download,

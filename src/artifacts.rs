@@ -15,7 +15,7 @@ use futures::{Stream, TryStreamExt};
 use std::sync::atomic::AtomicUsize;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::{unbounded_channel, Receiver};
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio_util::codec;
@@ -178,7 +178,6 @@ async fn stream_from_url(
 
 pub async fn download_artifacts(
     mut rx: Receiver<Task>,
-    tx: Sender<Task>,
     client: Client,
     logger: slog::Logger,
     config: &Config,
@@ -186,7 +185,15 @@ pub async fn download_artifacts(
 ) {
     let sem = Arc::new(Semaphore::new(config.concurrent_download));
     let processing_task = Arc::new(Mutex::new(HashSet::<String>::new()));
-    while let Some(task) = rx.recv().await {
+    let (fail_tx, mut fail_rx) = unbounded_channel();
+
+    loop {
+        let task: Task;
+        tokio::select! {
+            val = fail_rx.next() => { task = val.unwrap() }
+            val = rx.next() => { task = val.unwrap() }
+        }
+
         metrics.task_in_queue.dec();
 
         let logger = logger.new(o!("storage" => task.storage.clone(), "origin" => task.origin.clone(), "path" => task.path.clone()));
@@ -211,9 +218,9 @@ pub async fn download_artifacts(
 
         let permit = Arc::clone(&sem).acquire_owned().await;
         let client = client.clone();
-        let mut tx = tx.clone();
         let processing_task = processing_task.clone();
         let metrics = metrics.clone();
+        let fail_tx = fail_tx.clone();
 
         metrics.task_download.inc();
         tokio::spawn(async move {
@@ -232,7 +239,7 @@ pub async fn download_artifacts(
                 }
 
                 if !matches!(err, Error::HTTPError(_)) {
-                    tx.send(task_new).await.unwrap();
+                    fail_tx.send(task_new).unwrap();
                     metrics.task_in_queue.inc();
                 }
             } else {
