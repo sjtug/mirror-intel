@@ -190,8 +190,8 @@ pub async fn download_artifacts(
     loop {
         let task: Task;
         tokio::select! {
-            val = fail_rx.next() => { task = val.unwrap() }
-            val = rx.next() => { task = val.unwrap() }
+            val = fail_rx.next() => { if let Some(val) = val { task = val; } else { break; } }
+            val = rx.next() => { if let Some(val) = val { task = val; } else { break; } }
         }
 
         metrics.task_in_queue.dec();
@@ -250,6 +250,8 @@ pub async fn download_artifacts(
             metrics.task_download.dec();
         });
     }
+
+    info!(logger, "artifact download stop");
 }
 
 #[cfg(test)]
