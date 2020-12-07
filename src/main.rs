@@ -3,6 +3,7 @@
 mod artifacts;
 mod common;
 mod error;
+mod queue;
 mod repos;
 mod storage;
 mod utils;
@@ -10,6 +11,7 @@ mod utils;
 use artifacts::download_artifacts;
 use common::{Config, IntelMission, Metrics};
 use error::{Error, Result};
+use queue::QueueLength;
 use repos::{
     crates_io, fedora_iot, fedora_ostree, flathub, homebrew_bottles, pypi_packages, rust_static,
 };
@@ -85,17 +87,25 @@ async fn rocket() -> rocket::Rocket {
         .await
     });
 
-    rocket.manage(mission).manage(config).mount(
-        "/",
-        routes![
-            crates_io,
-            flathub,
-            fedora_ostree,
-            fedora_iot,
-            pypi_packages,
-            homebrew_bottles,
-            rust_static,
-            metrics
-        ],
-    )
+    let queue_length_fairing = QueueLength {
+        mission: mission.clone(),
+    };
+
+    rocket
+        .manage(mission)
+        .manage(config)
+        .attach(queue_length_fairing)
+        .mount(
+            "/",
+            routes![
+                crates_io,
+                flathub,
+                fedora_ostree,
+                fedora_iot,
+                pypi_packages,
+                homebrew_bottles,
+                rust_static,
+                metrics
+            ],
+        )
 }
