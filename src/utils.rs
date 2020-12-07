@@ -7,10 +7,7 @@ use reqwest::StatusCode;
 use rocket::response::Redirect;
 
 pub fn resolve_ostree(origin: &str, path: &str) -> Option<Redirect> {
-    if path.starts_with("summary")
-        || path.starts_with("config")
-        || path.starts_with("refs/")
-    {
+    if path.starts_with("summary") || path.starts_with("config") || path.starts_with("refs/") {
         return Some(Redirect::moved(format!("{}/{}", origin, path)));
     }
     None
