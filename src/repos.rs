@@ -1,11 +1,14 @@
 use crate::common::{Config, IntelMission};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::utils::{decode_path, resolve_object, resolve_ostree};
 
 use std::path::PathBuf;
 
-use rocket::response::Redirect;
 use rocket::State;
+use rocket::{
+    http::ContentType,
+    response::{Content, Redirect},
+};
 
 #[get("/crates.io/<path..>")]
 pub async fn crates_io(
@@ -126,4 +129,58 @@ pub async fn rust_static(
         return Ok(Redirect::moved(format!("{}/{}", origin, path)));
     }
     resolve_object("rust-static", path, origin, &intel_mission).await
+}
+
+#[derive(Debug, Responder)]
+pub enum DartResponse {
+    Content(Content<String>),
+    Redirect(Redirect),
+}
+
+impl From<Redirect> for DartResponse {
+    fn from(res: Redirect) -> Self {
+        Self::Redirect(res)
+    }
+}
+
+impl From<Content<String>> for DartResponse {
+    fn from(res: Content<String>) -> Self {
+        Self::Content(res)
+    }
+}
+
+#[get("/dart-pub/<path..>")]
+pub async fn dart_pub(
+    path: PathBuf,
+    intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
+) -> Result<DartResponse> {
+    let origin = &config.endpoints.dart_pub;
+    if path.starts_with("api/") {
+        if let Some(path) = path.to_str() {
+            let upstream = format!("{}/{}", origin, path);
+            let response = intel_mission.client.get(&upstream).send().await?;
+            if let Some(content_length) = response.content_length() {
+                if content_length > 4 * 1024 * 1024 {
+                    // redirect to upstream if the object is too big
+                    return Ok(Redirect::moved(upstream).into());
+                }
+            }
+            if !response.status().is_success() {
+                return Ok(Redirect::found(upstream).into());
+            }
+            // otherwise, rewrite content
+            let response = response.text().await?;
+            let response = response.replace(origin, &format!("{}/dart-pub", config.base_url));
+            Ok(Content(ContentType::JSON, response).into())
+        } else {
+            Err(Error::InvalidRequest(()))
+        }
+    } else {
+        Ok(
+            resolve_object("dart-pub", decode_path(&path)?, origin, &intel_mission)
+                .await?
+                .into(),
+        )
+    }
 }

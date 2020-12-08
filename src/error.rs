@@ -23,6 +23,8 @@ pub enum Error {
     CustomError(String),
     #[error("Too Large")]
     TooLarge(()),
+    #[error("Invalid Request")]
+    InvalidRequest(()),
 }
 
 impl<'r> Responder<'r, 'static> for Error {
