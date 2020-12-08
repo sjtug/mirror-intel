@@ -80,6 +80,7 @@ pub struct Endpoints {
     pub fedora_ostree: String,
     pub flathub: String,
     pub crates_io: String,
+    pub dart_pub: String,
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -90,6 +91,7 @@ pub struct Config {
     pub user_agent: String,
     pub file_threshold_mb: u64,
     pub ignore_threshold_mb: u64,
+    pub base_url: String,
 }
 
 pub const S3_BUCKET: &str = "899a892efef34b1b944a19981040f55b-oss01";

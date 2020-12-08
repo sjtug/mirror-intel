@@ -13,7 +13,8 @@ use common::{Config, IntelMission, Metrics};
 use error::{Error, Result};
 use queue::QueueLength;
 use repos::{
-    crates_io, fedora_iot, fedora_ostree, flathub, homebrew_bottles, pypi_packages, rust_static,
+    crates_io, dart_pub, fedora_iot, fedora_ostree, flathub, homebrew_bottles, pypi_packages,
+    rust_static,
 };
 use storage::check_s3;
 
@@ -105,6 +106,7 @@ async fn rocket() -> rocket::Rocket {
                 pypi_packages,
                 homebrew_bottles,
                 rust_static,
+                dart_pub,
                 metrics
             ],
         )

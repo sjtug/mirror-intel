@@ -1,4 +1,3 @@
-use std::io::Cursor;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rocket::fairing::{Fairing, Info, Kind};
