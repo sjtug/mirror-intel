@@ -9,7 +9,6 @@ base_url = "https://mirrors.sjtug.sjtu.edu.cn"
 ttl = 3
 direct_stream_size_kb = 512
 read_only = false
-worker = 16
 
 [default.endpoints]
 rustup = "https://mirrors.tuna.tsinghua.edu.cn/rustup"
