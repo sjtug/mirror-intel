@@ -81,6 +81,7 @@ pub struct Endpoints {
     pub flathub: String,
     pub crates_io: String,
     pub dart_pub: String,
+    pub guix: String,
 }
 
 #[derive(Clone, Deserialize, Debug)]
