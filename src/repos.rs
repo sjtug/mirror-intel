@@ -156,31 +156,44 @@ pub async fn dart_pub(
     config: State<'_, Config>,
 ) -> Result<DartResponse> {
     let origin = &config.endpoints.dart_pub;
+    let path = decode_path(&path)?;
     if path.starts_with("api/") {
-        if let Some(path) = path.to_str() {
-            let upstream = format!("{}/{}", origin, path);
-            let response = intel_mission.client.get(&upstream).send().await?;
-            if let Some(content_length) = response.content_length() {
-                if content_length > 4 * 1024 * 1024 {
-                    // redirect to upstream if the object is too big
-                    return Ok(Redirect::moved(upstream).into());
-                }
+        let upstream = format!("{}/{}", origin, path);
+        let response = intel_mission.client.get(&upstream).send().await?;
+        if let Some(content_length) = response.content_length() {
+            if content_length > 4 * 1024 * 1024 {
+                // redirect to upstream if the object is too big
+                return Ok(Redirect::moved(upstream).into());
             }
-            if !response.status().is_success() {
-                return Ok(Redirect::found(upstream).into());
-            }
-            // otherwise, rewrite content
-            let response = response.text().await?;
-            let response = response.replace(origin, &format!("{}/dart-pub", config.base_url));
-            Ok(Content(ContentType::JSON, response).into())
-        } else {
-            Err(Error::InvalidRequest(()))
         }
+        if !response.status().is_success() {
+            return Ok(Redirect::found(upstream).into());
+        }
+        // otherwise, rewrite content
+        let response = response.text().await?;
+        let response = response.replace(origin, &format!("{}/dart-pub", config.base_url));
+        Ok(Content(ContentType::JSON, response).into())
     } else {
         Ok(
-            resolve_object("dart-pub", decode_path(&path)?, origin, &intel_mission)
+            resolve_object("dart-pub", path, origin, &intel_mission)
                 .await?
                 .into(),
         )
+    }
+}
+
+#[get("/guix/<path..>")]
+pub async fn guix(
+    path: PathBuf,
+    intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
+) -> Result<Redirect> {
+    let origin = &config.endpoints.guix;
+    let path = decode_path(&path)?;
+    if path.starts_with("nar/") || path.ends_with(".narinfo") {
+        Ok(resolve_object("guix", path, origin, &intel_mission).await?)
+    } else {
+        let upstream = format!("{}/{}", origin, path);
+        return Ok(Redirect::moved(upstream).into());
     }
 }
