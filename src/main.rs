@@ -13,7 +13,7 @@ use common::{Config, IntelMission, Metrics};
 use error::{Error, Result};
 use queue::QueueLength;
 use repos::{
-    crates_io, dart_pub, fedora_iot, fedora_ostree, flathub, homebrew_bottles, pypi_packages,
+    crates_io, dart_pub, fedora_iot, fedora_ostree, flathub, guix, homebrew_bottles, pypi_packages,
     rust_static,
 };
 use storage::check_s3;
@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use prometheus::{Encoder, TextEncoder};
 use reqwest::{Client, ClientBuilder};
-use rocket::State;
+use rocket::{Request, State};
 use slog::{o, Drain};
 use tokio::sync::mpsc::channel;
 
@@ -46,6 +46,11 @@ pub async fn metrics(intel_mission: State<'_, IntelMission>) -> Result<Vec<u8>> 
         .encode(&metric_families, &mut buffer)
         .map_err(|err| Error::CustomError(format!("failed to encode metrics: {:?}", err)))?;
     Ok(buffer)
+}
+
+#[catch(404)]
+fn not_found(req: &Request) -> String {
+    format!("No route for {}. mirror-intel uses S3-like storage backend, which means that you could not browse files like other mirror sites. Please follow our instructions to set up your software registry.", req.uri())
 }
 
 #[launch]
@@ -96,6 +101,7 @@ async fn rocket() -> rocket::Rocket {
         .manage(mission)
         .manage(config)
         .attach(queue_length_fairing)
+        .register(catchers![not_found])
         .mount(
             "/",
             routes![
@@ -107,6 +113,7 @@ async fn rocket() -> rocket::Rocket {
                 homebrew_bottles,
                 rust_static,
                 dart_pub,
+                guix,
                 metrics
             ],
         )
