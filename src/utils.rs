@@ -94,33 +94,35 @@ impl IntelObject {
         intel_mission: &IntelMission,
     ) -> Result<IntelResponse<'static>> {
         match self {
-            IntelObject::Cached { resp, .. } => Ok(Response::build()
-                .raw_header("content-length", resp.content_length().unwrap().to_string())
-                .streamed_body(
+            IntelObject::Cached { resp, .. } => {
+                let mut intel_response = Response::build();
+                if let Some(content_length) = resp.content_length() {
+                    intel_response.raw_header("content-length", content_length.to_string());
+                }
+                intel_response.streamed_body(
                     resp.bytes_stream()
                         .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
                         .into_async_read()
                         .compat(),
-                )
-                .finalize()
-                .into()),
+                );
+                Ok(intel_response.finalize().into())
+            }
             IntelObject::Origin { ref task } => {
                 let resp = intel_mission.client.get(&task.upstream()).send().await?;
                 if !resp.status().is_success() {
                     return Ok(self.redirect().into());
                 }
-                let content_length = resp.content_length().unwrap().to_string();
-                let resp_stream = resp.bytes_stream();
-                Ok(Response::build()
-                    .raw_header("content-length", content_length)
-                    .streamed_body(
-                        resp_stream
-                            .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
-                            .into_async_read()
-                            .compat(),
-                    )
-                    .finalize()
-                    .into())
+                let mut intel_response = Response::build();
+                if let Some(content_length) = resp.content_length() {
+                    intel_response.raw_header("content-length", content_length.to_string());
+                }
+                intel_response.streamed_body(
+                    resp.bytes_stream()
+                        .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
+                        .into_async_read()
+                        .compat(),
+                );
+                Ok(intel_response.finalize().into())
             }
         }
     }
