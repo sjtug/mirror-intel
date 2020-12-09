@@ -25,7 +25,7 @@ extern crate rocket;
 use std::sync::Arc;
 
 use prometheus::{Encoder, TextEncoder};
-use reqwest::{Client, ClientBuilder, redirect::Policy};
+use reqwest::{redirect::Policy, Client, ClientBuilder};
 use rocket::{Request, State};
 use slog::{o, Drain};
 use tokio::sync::mpsc::channel;
@@ -84,7 +84,7 @@ async fn rocket() -> rocket::Rocket {
 
     let config_download = config.clone();
     let metrics_download = mission.metrics.clone();
-    
+
     tokio::spawn(async move {
         download_artifacts(
             rx,

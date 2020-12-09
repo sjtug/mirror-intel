@@ -22,9 +22,7 @@ impl Task {
     pub fn cached(&self) -> String {
         format!(
             "https://s3.jcloud.sjtu.edu.cn/{}/{}/{}",
-            S3_BUCKET,
-            self.storage,
-            self.path
+            S3_BUCKET, self.storage, self.path
         )
     }
 }
@@ -112,7 +110,7 @@ pub struct Config {
     pub base_url: String,
     pub ttl: usize,
     pub direct_stream_size_kb: u64,
-    pub read_only: bool
+    pub read_only: bool,
 }
 
 pub const S3_BUCKET: &str = "899a892efef34b1b944a19981040f55b-oss01";
@@ -125,7 +123,7 @@ pub enum IntelResponse<'a> {
 
 macro_rules! impl_from {
     ($tt: ty, $struct: ty, $variant: expr) => {
-        impl <'a> From<$tt> for $struct {
+        impl<'a> From<$tt> for $struct {
             fn from(res: $tt) -> Self {
                 $variant(res)
             }

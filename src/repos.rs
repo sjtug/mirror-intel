@@ -253,7 +253,10 @@ pub async fn guix(
             .await?
             .reverse_proxy(&intel_mission)
             .await?
-            .content_type(ContentType::new("application", "x-nix-narinfo;charset=utf-8"))
+            .content_type(ContentType::new(
+                "application",
+                "x-nix-narinfo;charset=utf-8",
+            ))
             .into())
     } else {
         Ok(Redirect::moved(task.upstream()).into())
