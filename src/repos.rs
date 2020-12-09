@@ -1,5 +1,5 @@
 use crate::common::{Config, IntelMission};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::utils::{decode_path, resolve_object, resolve_ostree};
 
 use std::path::PathBuf;
@@ -174,11 +174,9 @@ pub async fn dart_pub(
         let response = response.replace(origin, &format!("{}/dart-pub", config.base_url));
         Ok(Content(ContentType::JSON, response).into())
     } else {
-        Ok(
-            resolve_object("dart-pub", path, origin, &intel_mission)
-                .await?
-                .into(),
-        )
+        Ok(resolve_object("dart-pub", path, origin, &intel_mission)
+            .await?
+            .into())
     }
 }
 

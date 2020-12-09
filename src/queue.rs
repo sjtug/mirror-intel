@@ -1,9 +1,7 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use rocket::fairing::{Fairing, Info, Kind};
 use rocket::http::Header;
-use rocket::http::{ContentType, Method, Status};
-use rocket::{Data, Request, Response};
+use rocket::http::Method;
+use rocket::{Request, Response};
 
 use crate::common::IntelMission;
 
