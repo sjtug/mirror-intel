@@ -169,7 +169,7 @@ pub async fn rust_static(
     let origin = config.endpoints.rustup.clone();
     let path = decode_path(&path)?.to_string();
     let task = Task {
-        storage: "rust-static-test",
+        storage: "rust-static",
         ttl: config.ttl,
         origin,
         path,
@@ -206,11 +206,12 @@ pub async fn dart_pub(
         path,
     };
 
-    if task.path.starts_with("api/") {
+    if task.path == "api/packages" {
+        Ok(Redirect::moved(task.upstream()).into())
+    } else if task.path.starts_with("api/") {
         Ok(task
-            .resolve(&intel_mission)
-            .await?
-            .rewrite_upstream(&intel_mission, config.direct_stream_size_kb, |content| {
+            .resolve_upstream()
+            .rewrite_upstream(&intel_mission, 4096, |content| {
                 content.replace(&origin, &format!("{}/dart-pub", config.base_url))
             })
             .await?

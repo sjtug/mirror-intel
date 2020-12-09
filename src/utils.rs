@@ -39,6 +39,10 @@ impl Task {
 
         Ok(IntelObject::Origin { task: self })
     }
+
+    pub fn resolve_upstream(self) -> IntelObject {
+        IntelObject::Origin { task: self }
+    }
 }
 
 impl IntelObject {

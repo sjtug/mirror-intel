@@ -72,7 +72,6 @@ async fn rocket() -> rocket::Rocket {
     let (tx, rx) = channel(config.max_pending_task);
     let client = ClientBuilder::new()
         .user_agent(&config.user_agent)
-        .redirect(Policy::none())
         .build()
         .unwrap();
 
