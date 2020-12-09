@@ -16,6 +16,7 @@ use repos::{
     crates_io, dart_pub, fedora_iot, fedora_ostree, flathub, guix, homebrew_bottles, pypi_packages,
     rust_static,
 };
+use slog::info;
 use storage::check_s3;
 
 #[macro_use]
@@ -24,7 +25,7 @@ extern crate rocket;
 use std::sync::Arc;
 
 use prometheus::{Encoder, TextEncoder};
-use reqwest::{Client, ClientBuilder};
+use reqwest::{redirect::Policy, Client, ClientBuilder};
 use rocket::{Request, State};
 use slog::{o, Drain};
 use tokio::sync::mpsc::channel;
@@ -57,16 +58,16 @@ fn not_found(req: &Request) -> String {
 async fn rocket() -> rocket::Rocket {
     let logger = create_logger();
 
-    info!("checking if bucket is available...");
+    info!(logger, "checking if bucket is available...");
     // check if credentials are set and we have permissions
     check_s3().await;
-    info!("starting server...");
+    info!(logger, "starting server...");
 
     let rocket = rocket::ignite();
     let figment = rocket.figment();
     let config: Config = figment.extract().expect("config");
 
-    info!("{:?}", config);
+    info!(logger, "{:?}", config);
 
     let (tx, rx) = channel(config.max_pending_task);
     let client = ClientBuilder::new()
@@ -82,6 +83,7 @@ async fn rocket() -> rocket::Rocket {
 
     let config_download = config.clone();
     let metrics_download = mission.metrics.clone();
+
     tokio::spawn(async move {
         download_artifacts(
             rx,

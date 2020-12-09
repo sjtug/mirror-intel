@@ -137,7 +137,7 @@ async fn process_task(
     logger: slog::Logger,
 ) -> Result<()> {
     let (content_length, stream) =
-        stream_from_url(client, task.origin.clone(), config, logger.clone()).await?;
+        stream_from_url(client, task.upstream(), config, logger.clone()).await?;
     info!(logger, "get length={}", content_length);
     let key = format!("{}/{}", task.storage, task.path);
     stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
@@ -205,13 +205,22 @@ pub async fn download_artifacts(
 
         metrics.task_in_queue.dec();
 
+        if metrics.task_in_queue.get() > config.max_pending_task as i64 {
+            continue;
+        }
+
         let logger = logger.new(o!("storage" => task.storage.clone(), "origin" => task.origin.clone(), "path" => task.path.clone()));
 
         if task.ttl == 0 {
             continue;
         }
 
-        let task_hash = format!("{}/{}", task.origin, task.path);
+        if config.read_only {
+            info!(logger, "skipped");
+            continue;
+        }
+
+        let task_hash = task.upstream();
 
         {
             let mut processing_task = processing_task.lock().await;

@@ -22,7 +22,7 @@ futures-util = "0.3"
 futures = "0.3"
 bytes = "0.6"
 slog-envlogger = "2.2"
-tokio-util = "0.3"
+tokio-util = { version = "0.3", features = ["compat"] }
 serde = "1.0"
 prometheus = "0.11"
 
