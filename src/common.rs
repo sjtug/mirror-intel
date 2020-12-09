@@ -1,15 +1,32 @@
 use prometheus::{IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
 use reqwest::Client;
+use rocket::http::uri::Uri;
+use rocket::{response, Response};
 use serde::Deserialize;
-use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 
+use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct Task {
-    pub storage: String,
+    pub storage: &'static str,
     pub origin: String,
     pub path: String,
     pub ttl: usize,
+}
+
+impl Task {
+    pub fn upstream(&self) -> String {
+        format!("{}/{}", self.origin, self.path)
+    }
+
+    pub fn cached(&self) -> String {
+        format!(
+            "https://s3.jcloud.sjtu.edu.cn/{}/{}/{}",
+            S3_BUCKET,
+            self.storage,
+            self.path
+        )
+    }
 }
 
 pub struct Metrics {
@@ -93,6 +110,33 @@ pub struct Config {
     pub file_threshold_mb: u64,
     pub ignore_threshold_mb: u64,
     pub base_url: String,
+    pub ttl: usize,
+    pub direct_stream_size_kb: u64,
+    pub read_only: bool
 }
 
 pub const S3_BUCKET: &str = "899a892efef34b1b944a19981040f55b-oss01";
+
+#[derive(Debug, Responder)]
+pub enum IntelResponse<'a> {
+    Redirect(response::Redirect),
+    Response(response::Response<'a>),
+}
+
+macro_rules! impl_from {
+    ($tt: ty, $struct: ty, $variant: expr) => {
+        impl <'a> From<$tt> for $struct {
+            fn from(res: $tt) -> Self {
+                $variant(res)
+            }
+        }
+    };
+}
+
+impl_from! { response::Redirect, IntelResponse<'a>, IntelResponse::Redirect }
+impl_from! { response::Response<'a>, IntelResponse<'a>, IntelResponse::Response }
+
+pub enum IntelObject {
+    Cached { task: Task, resp: reqwest::Response },
+    Origin { task: Task },
+}

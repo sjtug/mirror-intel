@@ -1,6 +1,6 @@
-use crate::common::{Config, IntelMission};
+use crate::common::{Config, IntelMission, IntelResponse, Task};
 use crate::error::Result;
-use crate::utils::{decode_path, resolve_object, resolve_ostree};
+use crate::utils::{decode_path, ostree_ignore};
 
 use std::path::PathBuf;
 
@@ -15,14 +15,22 @@ pub async fn crates_io(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
-) -> Result<Redirect> {
-    resolve_object(
-        "crates.io",
-        decode_path(&path)?,
-        &config.endpoints.crates_io,
-        &intel_mission,
-    )
-    .await
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.crates_io.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "crates.io",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
+
+    Ok(task
+        .resolve(&intel_mission)
+        .await?
+        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+        .await?
+        .into())
 }
 
 #[get("/flathub/<path..>")]
@@ -30,13 +38,26 @@ pub async fn flathub(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
-) -> Result<Redirect> {
-    let path = decode_path(&path)?;
-    let origin = &config.endpoints.flathub;
-    if let Some(redir) = resolve_ostree(origin, path) {
-        return Ok(redir);
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.flathub.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "flathub",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
+
+    if ostree_ignore(&task.path) {
+        return Ok(Redirect::moved(task.upstream()).into());
     }
-    resolve_object("flathub", path, origin, &intel_mission).await
+
+    Ok(task
+        .resolve(&intel_mission)
+        .await?
+        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+        .await?
+        .into())
 }
 
 #[get("/fedora-ostree/<path..>")]
@@ -44,13 +65,26 @@ pub async fn fedora_ostree(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
-) -> Result<Redirect> {
-    let path = decode_path(&path)?;
-    let origin = &config.endpoints.fedora_ostree;
-    if let Some(redir) = resolve_ostree(origin, path) {
-        return Ok(redir);
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.fedora_ostree.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "fedora-ostree",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
+
+    if ostree_ignore(&task.path) {
+        return Ok(Redirect::moved(task.upstream()).into());
     }
-    resolve_object("fedora-ostree", path, origin, &intel_mission).await
+
+    Ok(task
+        .resolve(&intel_mission)
+        .await?
+        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+        .await?
+        .into())
 }
 
 #[get("/fedora-iot/<path..>")]
@@ -58,13 +92,26 @@ pub async fn fedora_iot(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
-) -> Result<Redirect> {
-    let path = decode_path(&path)?;
-    let origin = &config.endpoints.fedora_iot;
-    if let Some(redir) = resolve_ostree(origin, path) {
-        return Ok(redir);
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.fedora_iot.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "fedora-iot",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
+
+    if ostree_ignore(&task.path) {
+        return Ok(Redirect::moved(task.upstream()).into());
     }
-    resolve_object("fedora-iot", path, origin, &intel_mission).await
+
+    Ok(task
+        .resolve(&intel_mission)
+        .await?
+        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+        .await?
+        .into())
 }
 
 #[get("/pypi-packages/<path..>")]
@@ -72,19 +119,22 @@ pub async fn pypi_packages(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
-) -> Result<Redirect> {
-    let origin = &config.endpoints.pypi_packages;
-    if let Some(name) = path.file_name() {
-        if let Some(name) = name.to_str() {
-            if name.contains("-py2") && !name.contains("py3") {
-                // ignore python2 only packages
-                let path = decode_path(&path)?;
-                return Ok(Redirect::moved(format!("{}/{}", origin, path)));
-            }
-        }
-    }
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.pypi_packages.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "pypi-packages",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
 
-    resolve_object("pypi-packages", decode_path(&path)?, origin, &intel_mission).await
+    Ok(task
+        .resolve(&intel_mission)
+        .await?
+        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+        .await?
+        .into())
 }
 
 #[get("/homebrew-bottles/<path..>")]
@@ -92,14 +142,22 @@ pub async fn homebrew_bottles(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
-) -> Result<Redirect> {
-    resolve_object(
-        "homebrew-bottles",
-        decode_path(&path)?,
-        &config.endpoints.homebrew_bottles,
-        &intel_mission,
-    )
-    .await
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.homebrew_bottles.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "homebrew-bottles",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
+
+    Ok(task
+        .resolve(&intel_mission)
+        .await?
+        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+        .await?
+        .into())
 }
 
 #[get("/rust-static/<path..>")]
@@ -107,46 +165,30 @@ pub async fn rust_static(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
-) -> Result<Redirect> {
-    let origin = &config.endpoints.rustup;
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.rustup.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "rust-static-test",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
 
-    if let Some(name) = path.file_name() {
-        if let Some(name) = name.to_str() {
-            if name.starts_with("channel-") || name.ends_with(".toml") {
-                let path = decode_path(&path)?;
-                // mirrors.tuna will rewrite channel toml, and would make rustup to redirect to TUNA.
-                return Ok(Redirect::moved(format!(
-                    "https://static.rust-lang.org/{}",
-                    path
-                )));
-            }
-        }
+    if task.path.contains("channel-") || task.path.ends_with(".toml") {
+        return Ok(Redirect::moved(task.upstream()).into());
     }
 
-    let path = decode_path(&path)?;
-
-    if !path.starts_with("dist") && !path.starts_with("rustup") {
-        return Ok(Redirect::moved(format!("{}/{}", origin, path)));
+    if !task.path.starts_with("dist") && !task.path.starts_with("rustup") {
+        return Ok(Redirect::moved(task.upstream()).into());
     }
-    resolve_object("rust-static", path, origin, &intel_mission).await
-}
 
-#[derive(Debug, Responder)]
-pub enum DartResponse {
-    Content(Content<String>),
-    Redirect(Redirect),
-}
-
-impl From<Redirect> for DartResponse {
-    fn from(res: Redirect) -> Self {
-        Self::Redirect(res)
-    }
-}
-
-impl From<Content<String>> for DartResponse {
-    fn from(res: Content<String>) -> Self {
-        Self::Content(res)
-    }
+    Ok(task
+        .resolve(&intel_mission)
+        .await?
+        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+        .await?
+        .into())
 }
 
 #[get("/dart-pub/<path..>")]
@@ -154,27 +196,30 @@ pub async fn dart_pub(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
-) -> Result<DartResponse> {
-    let origin = &config.endpoints.dart_pub;
-    let path = decode_path(&path)?;
-    if path.starts_with("api/") {
-        let upstream = format!("{}/{}", origin, path);
-        let response = intel_mission.client.get(&upstream).send().await?;
-        if let Some(content_length) = response.content_length() {
-            if content_length > 4 * 1024 * 1024 {
-                // redirect to upstream if the object is too big
-                return Ok(Redirect::moved(upstream).into());
-            }
-        }
-        if !response.status().is_success() {
-            return Ok(Redirect::found(upstream).into());
-        }
-        // otherwise, rewrite content
-        let response = response.text().await?;
-        let response = response.replace(origin, &format!("{}/dart-pub", config.base_url));
-        Ok(Content(ContentType::JSON, response).into())
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.dart_pub.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "dart-pub",
+        ttl: config.ttl,
+        origin: origin.clone(),
+        path,
+    };
+
+    if task.path.starts_with("api/") {
+        Ok(task
+            .resolve(&intel_mission)
+            .await?
+            .rewrite_upstream(&intel_mission, config.direct_stream_size_kb, |content| {
+                content.replace(&origin, &format!("{}/dart-pub", config.base_url))
+            })
+            .await?
+            .into())
     } else {
-        Ok(resolve_object("dart-pub", path, origin, &intel_mission)
+        Ok(task
+            .resolve(&intel_mission)
+            .await?
+            .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
             .await?
             .into())
     }
@@ -185,13 +230,32 @@ pub async fn guix(
     path: PathBuf,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
-) -> Result<Redirect> {
-    let origin = &config.endpoints.guix;
-    let path = decode_path(&path)?;
-    if path.starts_with("nar/") || path.ends_with(".narinfo") {
-        Ok(resolve_object("guix", path, origin, &intel_mission).await?)
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.guix.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "guix",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
+
+    if task.path.starts_with("nar/") {
+        Ok(task
+            .resolve(&intel_mission)
+            .await?
+            .reverse_proxy(&intel_mission)
+            .await?
+            .into())
+    } else if task.path.ends_with(".narinfo") {
+        Ok(task
+            .resolve(&intel_mission)
+            .await?
+            .reverse_proxy(&intel_mission)
+            .await?
+            .content_type(ContentType::new("application", "x-nix-narinfo;charset=utf-8"))
+            .into())
     } else {
-        let upstream = format!("{}/{}", origin, path);
-        return Ok(Redirect::moved(upstream).into());
+        Ok(Redirect::moved(task.upstream()).into())
     }
 }
