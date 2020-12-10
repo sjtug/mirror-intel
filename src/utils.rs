@@ -8,7 +8,7 @@ use futures::stream::TryStreamExt;
 use response::ResponseBuilder;
 use rocket::{
     http::ContentType,
-    response::{self, Content, Redirect},
+    response::{self, Redirect},
     Response,
 };
 use tokio_util::compat::FuturesAsyncReadCompatExt;
