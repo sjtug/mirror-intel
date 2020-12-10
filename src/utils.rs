@@ -5,6 +5,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 
 use futures::stream::TryStreamExt;
+use response::ResponseBuilder;
 use rocket::{
     http::ContentType,
     response::{self, Content, Redirect},
@@ -93,6 +94,15 @@ impl IntelObject {
         Ok(self.redirect().into())
     }
 
+    fn set_status(intel_response: &mut ResponseBuilder, response: &reqwest::Response) {
+        let status = response.status();
+        if let Some(reason) = status.canonical_reason() {
+            intel_response.status(rocket::http::Status::new(status.as_u16(), reason));
+        } else {
+            intel_response.status(rocket::http::Status::new(status.as_u16(), ""));
+        }
+    }
+
     pub async fn reverse_proxy(
         self,
         intel_mission: &IntelMission,
@@ -103,6 +113,7 @@ impl IntelObject {
                 if let Some(content_length) = resp.content_length() {
                     intel_response.raw_header("content-length", content_length.to_string());
                 }
+                Self::set_status(&mut intel_response, &resp);
                 intel_response.streamed_body(
                     resp.bytes_stream()
                         .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
@@ -113,13 +124,11 @@ impl IntelObject {
             }
             IntelObject::Origin { ref task } => {
                 let resp = intel_mission.client.get(&task.upstream()).send().await?;
-                if !resp.status().is_success() {
-                    return Ok(self.redirect().into());
-                }
                 let mut intel_response = Response::build();
                 if let Some(content_length) = resp.content_length() {
                     intel_response.raw_header("content-length", content_length.to_string());
                 }
+                Self::set_status(&mut intel_response, &resp);
                 intel_response.streamed_body(
                     resp.bytes_stream()
                         .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
