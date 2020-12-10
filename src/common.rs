@@ -1,7 +1,7 @@
 use prometheus::{IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
 use reqwest::Client;
-use rocket::http::uri::Uri;
-use rocket::{response, Response};
+
+use rocket::response;
 use serde::Deserialize;
 use tokio::sync::mpsc::Sender;
 

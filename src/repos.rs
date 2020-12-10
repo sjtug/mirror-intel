@@ -4,11 +4,8 @@ use crate::utils::{decode_path, ostree_ignore};
 
 use std::path::PathBuf;
 
+use rocket::response::Redirect;
 use rocket::State;
-use rocket::{
-    http::ContentType,
-    response::{Content, Redirect},
-};
 
 #[get("/crates.io/<path..>")]
 pub async fn crates_io(
@@ -235,7 +232,7 @@ pub async fn guix(
     let origin = config.endpoints.guix.clone();
     let path = decode_path(&path)?.to_string();
     let task = Task {
-        storage: "guix",
+        storage: "guix-test",
         ttl: config.ttl,
         origin,
         path,
