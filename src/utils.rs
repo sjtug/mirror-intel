@@ -96,7 +96,10 @@ impl IntelObject {
 
     fn set_status(intel_response: &mut ResponseBuilder, response: &reqwest::Response) {
         let status = response.status();
-        if let Some(reason) = status.canonical_reason() {
+        // special case for NGINX 499
+        if status.as_u16() == 499 {
+            intel_response.status(rocket::http::Status::NotFound);
+        } else if let Some(reason) = status.canonical_reason() {
             intel_response.status(rocket::http::Status::new(status.as_u16(), reason));
         } else {
             intel_response.status(rocket::http::Status::new(status.as_u16(), ""));
