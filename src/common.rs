@@ -98,7 +98,7 @@ pub struct Endpoints {
     pub dart_pub: String,
     pub guix: String,
     pub pytorch_wheels: String,
-    pub linuxbrew_bottles: String
+    pub linuxbrew_bottles: String,
 }
 
 #[derive(Clone, Deserialize, Debug)]

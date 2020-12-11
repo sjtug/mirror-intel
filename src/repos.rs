@@ -157,7 +157,6 @@ pub async fn homebrew_bottles(
         .into())
 }
 
-
 #[get("/linuxbrew-bottles/<path..>")]
 pub async fn linuxbrew_bottles(
     path: PathBuf,
