@@ -8,7 +8,6 @@ use rocket::http::hyper::Bytes;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::Arc;
 
 use futures::{Stream, TryStreamExt};
@@ -102,6 +101,19 @@ impl Drop for FileWrapper {
     }
 }
 
+enum ArtifactStream<F, M, D, U>
+where
+    F: Stream<Item = IoResult>,
+    M: Stream<Item = IoResult>,
+    D: Stream<Item = IoResult>,
+    U: Stream<Item = IoResult>,
+{
+    FileStream(F),
+    MemoryStream(M),
+    DirectStream(D),
+    UnsizedMemoryStream(U),
+}
+
 async fn to_file_stream(
     mut stream: impl Stream<Item = IoResult> + Unpin,
     logger: slog::Logger,
@@ -140,7 +152,20 @@ async fn process_task(
         stream_from_url(client, task.upstream(), config, logger.clone()).await?;
     info!(logger, "get length={}", content_length);
     let key = format!("{}/{}", task.storage, task.path);
-    stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
+    let _result = match stream {
+        ArtifactStream::FileStream(stream) => {
+            stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?
+        }
+        ArtifactStream::MemoryStream(stream) => {
+            stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?
+        }
+        ArtifactStream::UnsizedMemoryStream(stream) => {
+            stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?
+        }
+        ArtifactStream::DirectStream(stream) => {
+            stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?
+        }
+    };
     info!(logger, "upload to bucket");
     Ok(())
 }
@@ -150,7 +175,15 @@ async fn stream_from_url(
     url: String,
     config: &Config,
     logger: slog::Logger,
-) -> Result<(u64, Pin<Box<dyn Stream<Item = IoResult> + Sync + Send>>)> {
+) -> Result<(
+    u64,
+    ArtifactStream<
+        impl Stream<Item = IoResult>,
+        impl Stream<Item = IoResult>,
+        impl Stream<Item = IoResult>,
+        impl Stream<Item = IoResult>,
+    >,
+)> {
     let response = client.get(&url).send().await?;
     let status = response.status();
     if !status.is_success() {
@@ -163,23 +196,23 @@ async fn stream_from_url(
             info!(logger, "stream mode: file backend");
             let stream = transform_stream(response.bytes_stream(), logger.clone());
             let stream = to_file_stream(stream, logger).await?;
-            Ok((content_length, Box::pin(stream)))
+            Ok((content_length, ArtifactStream::FileStream(stream)))
         } else if content_length > 1024 * 1024 {
             info!(logger, "stream mode: memory cache");
             let stream = transform_stream(response.bytes_stream(), logger);
             let stream = to_memory_stream(content_length as usize, stream).await?;
-            Ok((content_length, Box::pin(stream)))
+            Ok((content_length, ArtifactStream::MemoryStream(stream)))
         } else {
             info!(logger, "stream mode: direct copy");
             let stream = transform_stream(response.bytes_stream(), logger);
-            Ok((content_length, Box::pin(stream)))
+            Ok((content_length, ArtifactStream::DirectStream(stream)))
         }
     } else {
         info!(logger, "stream mode: direct copy");
         let resp = response.bytes().await?;
         Ok((
             resp.len() as u64,
-            Box::pin(futures::stream::iter(vec![resp]).map(|x| Ok(x))),
+            ArtifactStream::UnsizedMemoryStream(futures::stream::iter(vec![resp]).map(|x| Ok(x))),
         ))
     }
 }
