@@ -256,3 +256,30 @@ pub async fn guix(
         Ok(Redirect::moved(task.upstream()).into())
     }
 }
+
+#[get("/pytorch-wheels/<path..>")]
+pub async fn pytorch_wheels(
+    path: PathBuf,
+    intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.pytorch_wheels.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "pytorch-wheels",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
+
+    if task.path.ends_with(".whl") {
+        Ok(task
+            .resolve(&intel_mission)
+            .await?
+            .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+            .await?
+            .into())
+    } else {
+        Ok(Redirect::moved(task.upstream()).into())
+    }
+}
