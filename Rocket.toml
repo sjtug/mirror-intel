@@ -12,7 +12,8 @@ read_only = true
 
 [default.endpoints]
 rustup = "https://mirrors.tuna.tsinghua.edu.cn/rustup"
-homebrew_bottles = "https://mirrors.bfsu.edu.cn/homebrew-bottles"
+homebrew_bottles = "https://homebrew.bintray.com"
+linuxbrew_bottles = "https://linuxbrew.bintray.com"
 pypi_packages = "https://mirrors.bfsu.edu.cn/pypi/web/packages"
 fedora_iot = "https://d2ju0wfl996cmc.cloudfront.net"
 fedora_ostree = "https://d2uk5hbyrobdzx.cloudfront.net"

@@ -157,6 +157,29 @@ pub async fn homebrew_bottles(
         .into())
 }
 
+#[get("/linuxbrew-bottles/<path..>")]
+pub async fn linuxbrew_bottles(
+    path: PathBuf,
+    intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.linuxbrew_bottles.clone();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "linuxbrew-bottles",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
+
+    Ok(task
+        .resolve(&intel_mission)
+        .await?
+        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+        .await?
+        .into())
+}
+
 #[get("/rust-static/<path..>")]
 pub async fn rust_static(
     path: PathBuf,
