@@ -309,8 +309,6 @@ pub async fn pytorch_wheels(
     }
 }
 
-lazy_static! {}
-
 #[get("/sjtug-internal/<path..>")]
 pub async fn sjtug_internal(
     path: PathBuf,
