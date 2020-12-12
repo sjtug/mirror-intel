@@ -4,6 +4,8 @@ use crate::utils::{decode_path, ostree_ignore};
 
 use std::path::PathBuf;
 
+use lazy_static::lazy_static;
+use regex::Regex;
 use rocket::response::Redirect;
 use rocket::State;
 
@@ -296,6 +298,40 @@ pub async fn pytorch_wheels(
     };
 
     if task.path.ends_with(".whl") {
+        Ok(task
+            .resolve(&intel_mission)
+            .await?
+            .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+            .await?
+            .into())
+    } else {
+        Ok(Redirect::moved(task.upstream()).into())
+    }
+}
+
+lazy_static! {}
+
+#[get("/sjtug-internal/<path..>")]
+pub async fn sjtug_internal(
+    path: PathBuf,
+    intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
+) -> Result<IntelResponse<'static>> {
+    let origin = "https://github.com/sjtug".to_string();
+    let path = decode_path(&path)?.to_string();
+    let task = Task {
+        storage: "sjtug-internal",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
+
+    lazy_static! {
+        static ref REGEX: Regex =
+            Regex::new("^([^/]*)/releases/download/v([^/]*)/[^/]*.tar.gz$").unwrap();
+    };
+
+    if REGEX.is_match(&task.path) {
         Ok(task
             .resolve(&intel_mission)
             .await?
