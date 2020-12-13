@@ -25,6 +25,8 @@ pub enum Error {
     TooLarge(()),
     #[error("Invalid Request")]
     InvalidRequest(()),
+    #[error("List Objects Error {0}")]
+    ListObjectsError(#[from] rusoto_core::RusotoError<rusoto_s3::ListObjectsError>),
 }
 
 impl<'r> Responder<'r, 'static> for Error {
