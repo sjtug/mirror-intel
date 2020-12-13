@@ -326,7 +326,7 @@ pub async fn sjtug_internal(
 
     lazy_static! {
         static ref REGEX: Regex =
-            Regex::new("^([^/]*)/releases/download/v([^/]*)/[^/]*.tar.gz$").unwrap();
+            Regex::new("^[^/]*/releases/download/[^/]*/[^/]*.tar.gz$").unwrap();
     };
 
     if REGEX.is_match(&task.path) {

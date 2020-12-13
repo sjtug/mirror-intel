@@ -16,7 +16,7 @@ use repos::{
     crates_io, dart_pub, fedora_iot, fedora_ostree, flathub, guix, homebrew_bottles,
     linuxbrew_bottles, pypi_packages, pytorch_wheels, rust_static, sjtug_internal,
 };
-use slog::info;
+use slog::{info, warn};
 use storage::check_s3;
 
 #[macro_use]
@@ -57,15 +57,16 @@ fn not_found(req: &Request) -> String {
 #[launch]
 async fn rocket() -> rocket::Rocket {
     let logger = create_logger();
+    let rocket = rocket::ignite();
+    let figment = rocket.figment();
+    let mut config: Config = figment.extract().expect("config");
 
     info!(logger, "checking if bucket is available...");
     // check if credentials are set and we have permissions
-    check_s3().await;
-    info!(logger, "starting server...");
-
-    let rocket = rocket::ignite();
-    let figment = rocket.figment();
-    let config: Config = figment.extract().expect("config");
+    if let Err(error) = check_s3().await {
+        warn!(logger, "s3 storage backend not available, running in read-only mode"; "error" => format!("{:?}", error));
+        config.read_only = true;
+    }
 
     info!(logger, "{:?}", config);
 
@@ -83,6 +84,8 @@ async fn rocket() -> rocket::Rocket {
 
     let config_download = config.clone();
     let metrics_download = mission.metrics.clone();
+
+    info!(logger, "starting server...");
 
     tokio::spawn(async move {
         download_artifacts(

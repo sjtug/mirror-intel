@@ -9,6 +9,7 @@ base_url = "https://mirrors.sjtug.sjtu.edu.cn"
 ttl = 3
 direct_stream_size_kb = 4
 read_only = true
+# log_level = "off"
 
 [default.endpoints]
 rustup = "https://mirrors.tuna.tsinghua.edu.cn/rustup"
