@@ -130,7 +130,7 @@ simple_intel! { linuxbrew_bottles, "linuxbrew-bottles", allow_all }
 simple_intel! { rust_static, "rust-static", rust_static_allow }
 simple_intel! { pytorch_wheels, "pytorch-wheels", wheels_allow }
 simple_intel! { sjtug_internal, "sjtug-internal", github_releases_allow }
-simple_intel! { flutter_infra, "flutter-infra", flutter_allow }
+simple_intel! { flutter_infra, "flutter_infra", flutter_allow }
 
 #[get("/dart-pub/<path..>")]
 pub async fn dart_pub(
