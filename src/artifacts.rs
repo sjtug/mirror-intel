@@ -140,7 +140,13 @@ async fn process_task(
         stream_from_url(client, task.upstream(), config, logger.clone()).await?;
     info!(logger, "get length={}", content_length);
     let key = format!("{}/{}", task.storage, task.path);
-    stream_to_s3(&key, content_length, rusoto_s3::StreamingBody::new(stream)).await?;
+    stream_to_s3(
+        &key,
+        content_length,
+        rusoto_s3::StreamingBody::new(stream),
+        &config.s3.bucket,
+    )
+    .await?;
     info!(logger, "upload to bucket");
     Ok(())
 }

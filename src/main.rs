@@ -3,6 +3,7 @@
 mod artifacts;
 mod common;
 mod error;
+mod intel_path;
 mod queue;
 mod repos;
 mod storage;
@@ -12,12 +13,10 @@ use artifacts::download_artifacts;
 use common::{Config, IntelMission, Metrics};
 use error::{Error, Result};
 use queue::QueueLength;
-use repos::{
-    crates_io, dart_pub, fedora_iot, fedora_ostree, flathub, guix, homebrew_bottles,
-    linuxbrew_bottles, pypi_packages, pytorch_wheels, rust_static, sjtug_internal,
-};
+use repos::*;
 use slog::{info, warn};
 use storage::check_s3;
+use utils::not_found;
 
 #[macro_use]
 extern crate rocket;
@@ -26,7 +25,7 @@ use std::sync::Arc;
 
 use prometheus::{Encoder, TextEncoder};
 use reqwest::{Client, ClientBuilder};
-use rocket::{Request, State};
+use rocket::State;
 use slog::{o, Drain};
 use tokio::sync::mpsc::channel;
 
@@ -49,11 +48,6 @@ pub async fn metrics(intel_mission: State<'_, IntelMission>) -> Result<Vec<u8>> 
     Ok(buffer)
 }
 
-#[catch(404)]
-fn not_found(req: &Request) -> String {
-    format!("No route for {}. mirror-intel uses S3-like storage backend, which means that you could not browse files like other mirror sites. Please follow our instructions to set up your software registry.", req.uri())
-}
-
 #[launch]
 async fn rocket() -> rocket::Rocket {
     let logger = create_logger();
@@ -63,7 +57,7 @@ async fn rocket() -> rocket::Rocket {
 
     info!(logger, "checking if bucket is available...");
     // check if credentials are set and we have permissions
-    if let Err(error) = check_s3().await {
+    if let Err(error) = check_s3(&config.s3.bucket).await {
         warn!(logger, "s3 storage backend not available, running in read-only mode"; "error" => format!("{:?}", error));
         config.read_only = true;
     }
@@ -110,19 +104,29 @@ async fn rocket() -> rocket::Rocket {
         .mount(
             "/",
             routes![
-                crates_io,
-                flathub,
-                fedora_ostree,
-                fedora_iot,
-                pypi_packages,
-                homebrew_bottles,
-                rust_static,
+                crates_io_get,
+                crates_io_head,
+                flathub_get,
+                flathub_head,
+                fedora_ostree_get,
+                fedora_ostree_head,
+                fedora_iot_get,
+                fedora_iot_head,
+                pypi_packages_get,
+                pypi_packages_head,
+                homebrew_bottles_get,
+                homebrew_bottles_head,
+                rust_static_get,
+                rust_static_head,
                 dart_pub,
                 guix,
-                pytorch_wheels,
-                linuxbrew_bottles,
+                pytorch_wheels_get,
+                pytorch_wheels_head,
+                linuxbrew_bottles_get,
+                linuxbrew_bottles_head,
+                sjtug_internal_get,
+                sjtug_internal_head,
                 metrics,
-                sjtug_internal
             ],
         )
 }
