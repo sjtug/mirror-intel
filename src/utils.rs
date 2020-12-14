@@ -1,4 +1,4 @@
-use crate::common::{IntelMission, IntelObject, IntelResponse, Task};
+use crate::common::{Config, IntelMission, IntelObject, IntelResponse, Task};
 use crate::error::{Error, Result};
 
 use std::io::Cursor;
@@ -18,9 +18,19 @@ pub fn decode_path(path: &PathBuf) -> Result<&str> {
 }
 
 impl Task {
-    pub async fn resolve(self, mission: &IntelMission) -> Result<IntelObject> {
+    async fn resolve_internal(
+        self,
+        mission: &IntelMission,
+        config: &Config,
+        head: bool,
+    ) -> Result<IntelObject> {
         mission.metrics.resolve_counter.inc();
-        if let Ok(resp) = mission.client.get(&self.cached()).send().await {
+        let req = if head {
+            mission.client.head(&self.cached(config))
+        } else {
+            mission.client.get(&self.cached(config))
+        };
+        if let Ok(resp) = req.send().await {
             if resp.status().is_success() {
                 return Ok(IntelObject::Cached { task: self, resp });
             } else {
@@ -33,27 +43,19 @@ impl Task {
                     .map_err(|_| Error::SendError(()))?;
             }
         }
-
         Ok(IntelObject::Origin { task: self })
     }
 
-    pub async fn resolve_no_content(self, mission: &IntelMission) -> Result<()> {
-        mission.metrics.resolve_counter.inc();
-        if let Ok(resp) = mission.client.head(&self.cached()).send().await {
-            if resp.status().is_success() {
-                return Ok(());
-            } else {
-                mission.metrics.task_in_queue.inc();
-                mission
-                    .tx
-                    .clone()
-                    .send(self.clone())
-                    .await
-                    .map_err(|_| Error::SendError(()))?;
-            }
-        }
+    pub async fn resolve(self, mission: &IntelMission, config: &Config) -> Result<IntelObject> {
+        self.resolve_internal(mission, config, false).await
+    }
 
-        Ok(())
+    pub async fn resolve_no_content(
+        self,
+        mission: &IntelMission,
+        config: &Config,
+    ) -> Result<IntelObject> {
+        self.resolve_internal(mission, config, true).await
     }
 
     pub fn resolve_upstream(self) -> IntelObject {
@@ -69,17 +71,17 @@ impl IntelObject {
         }
     }
 
-    pub fn target(&self) -> String {
+    pub fn target(&self, config: &crate::common::Config) -> String {
         match self {
-            IntelObject::Cached { task, .. } => task.cached(),
+            IntelObject::Cached { task, .. } => task.cached(config),
             IntelObject::Origin { task } => task.upstream(),
         }
     }
 
-    pub fn redirect(self) -> Redirect {
+    pub fn redirect(self, config: &crate::common::Config) -> Redirect {
         match &self {
-            IntelObject::Cached { .. } => Redirect::moved(self.target()),
-            IntelObject::Origin { .. } => Redirect::found(self.target()),
+            IntelObject::Cached { .. } => Redirect::moved(self.target(config)),
+            IntelObject::Origin { .. } => Redirect::found(self.target(config)),
         }
     }
 
@@ -88,6 +90,7 @@ impl IntelObject {
         intel_mission: &IntelMission,
         below_size_kb: u64,
         f: impl Fn(String) -> String,
+        config: &Config,
     ) -> Result<IntelResponse<'static>> {
         let task = self.task();
         let upstream = task.upstream();
@@ -106,7 +109,7 @@ impl IntelObject {
             }
         }
 
-        Ok(self.redirect().into())
+        Ok(self.redirect(config).into())
     }
 
     fn set_status(intel_response: &mut ResponseBuilder, response: &reqwest::Response) {
@@ -157,10 +160,12 @@ impl IntelObject {
             }
         }
     }
+
     pub async fn stream_small_cached(
         self,
         size_kb: u64,
         intel_mission: &IntelMission,
+        config: &Config,
     ) -> Result<IntelResponse<'static>> {
         match &self {
             IntelObject::Cached { resp, .. } => {
@@ -170,9 +175,9 @@ impl IntelObject {
                         return Ok(self.reverse_proxy(intel_mission).await?.into());
                     }
                 }
-                Ok(self.redirect().into())
+                Ok(self.redirect(config).into())
             }
-            IntelObject::Origin { .. } => Ok(self.redirect().into()),
+            IntelObject::Origin { .. } => Ok(self.redirect(config).into()),
         }
     }
 }
@@ -187,4 +192,9 @@ impl<'a> IntelResponse<'a> {
         }
         self
     }
+}
+
+#[catch(404)]
+pub fn not_found(req: &rocket::Request) -> String {
+    format!("No route for {}. mirror-intel uses S3-like storage backend, which means that you could not browse files like other mirror sites. Please follow our instructions to set up your software registry.", req.uri())
 }

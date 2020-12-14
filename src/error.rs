@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::result;
 
+use rocket::http::Status;
 use rocket::request::Request;
 use rocket::response::{self, Responder, Response};
 use thiserror::Error;
@@ -33,6 +34,7 @@ impl<'r> Responder<'r, 'static> for Error {
     fn respond_to(self, _: &'r Request<'_>) -> response::Result<'static> {
         let fmt_str = format!("{:?}", self);
         Response::build()
+            .status(Status::InternalServerError)
             .sized_body(fmt_str.len(), Cursor::new(fmt_str))
             .ok()
     }

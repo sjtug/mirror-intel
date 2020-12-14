@@ -12,7 +12,7 @@ read_only = true
 # log_level = "off"
 
 [default.endpoints]
-rustup = "https://mirrors.tuna.tsinghua.edu.cn/rustup"
+rust_static = "https://mirrors.tuna.tsinghua.edu.cn/rustup"
 homebrew_bottles = "https://homebrew.bintray.com"
 linuxbrew_bottles = "https://linuxbrew.bintray.com"
 pypi_packages = "https://mirrors.bfsu.edu.cn/pypi/web/packages"
@@ -23,3 +23,8 @@ crates_io = "https://static.crates.io"
 dart_pub = "https://mirrors.tuna.tsinghua.edu.cn/dart-pub"
 guix = "https://ci.guix.gnu.org"
 pytorch_wheels = "https://download.pytorch.org/whl"
+sjtug_internal = "https://github.com/sjtug"
+
+[default.s3]
+endpoint = "https://s3.jcloud.sjtu.edu.cn"
+bucket = "899a892efef34b1b944a19981040f55b-oss01"

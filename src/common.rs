@@ -19,11 +19,15 @@ impl Task {
         format!("{}/{}", self.origin, self.path)
     }
 
-    pub fn cached(&self) -> String {
+    pub fn cached(&self, config: &Config) -> String {
         format!(
-            "https://s3.jcloud.sjtu.edu.cn/{}/{}/{}",
-            S3_BUCKET, self.storage, self.path
+            "{}/{}/{}/{}",
+            config.s3.endpoint, config.s3.bucket, self.storage, self.path
         )
+    }
+
+    pub fn root_path(&self) -> String {
+        format!("/{}/{}", self.storage, self.path)
     }
 }
 
@@ -88,7 +92,7 @@ pub struct IntelMission {
 
 #[derive(Clone, Deserialize, Debug)]
 pub struct Endpoints {
-    pub rustup: String,
+    pub rust_static: String,
     pub homebrew_bottles: String,
     pub pypi_packages: String,
     pub fedora_iot: String,
@@ -99,6 +103,13 @@ pub struct Endpoints {
     pub guix: String,
     pub pytorch_wheels: String,
     pub linuxbrew_bottles: String,
+    pub sjtug_internal: String,
+}
+
+#[derive(Clone, Deserialize, Debug)]
+pub struct S3Config {
+    pub endpoint: String,
+    pub bucket: String,
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -106,6 +117,7 @@ pub struct Config {
     pub max_pending_task: usize,
     pub concurrent_download: usize,
     pub endpoints: Endpoints,
+    pub s3: S3Config,
     pub user_agent: String,
     pub file_threshold_mb: u64,
     pub ignore_threshold_mb: u64,
@@ -114,8 +126,6 @@ pub struct Config {
     pub direct_stream_size_kb: u64,
     pub read_only: bool,
 }
-
-pub const S3_BUCKET: &str = "899a892efef34b1b944a19981040f55b-oss01";
 
 #[derive(Debug, Responder)]
 pub enum IntelResponse<'a> {

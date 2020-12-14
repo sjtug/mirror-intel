@@ -15,6 +15,7 @@ use queue::QueueLength;
 use repos::*;
 use slog::{info, warn};
 use storage::check_s3;
+use utils::not_found;
 
 #[macro_use]
 extern crate rocket;
@@ -23,7 +24,7 @@ use std::sync::Arc;
 
 use prometheus::{Encoder, TextEncoder};
 use reqwest::{Client, ClientBuilder};
-use rocket::{Request, State};
+use rocket::State;
 use slog::{o, Drain};
 use tokio::sync::mpsc::channel;
 
@@ -46,11 +47,6 @@ pub async fn metrics(intel_mission: State<'_, IntelMission>) -> Result<Vec<u8>> 
     Ok(buffer)
 }
 
-#[catch(404)]
-fn not_found(req: &Request) -> String {
-    format!("No route for {}. mirror-intel uses S3-like storage backend, which means that you could not browse files like other mirror sites. Please follow our instructions to set up your software registry.", req.uri())
-}
-
 #[launch]
 async fn rocket() -> rocket::Rocket {
     let logger = create_logger();
@@ -60,7 +56,7 @@ async fn rocket() -> rocket::Rocket {
 
     info!(logger, "checking if bucket is available...");
     // check if credentials are set and we have permissions
-    if let Err(error) = check_s3().await {
+    if let Err(error) = check_s3(&config.s3.bucket).await {
         warn!(logger, "s3 storage backend not available, running in read-only mode"; "error" => format!("{:?}", error));
         config.read_only = true;
     }
