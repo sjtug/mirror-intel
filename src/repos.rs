@@ -1,217 +1,115 @@
 use crate::common::{Config, IntelMission, IntelResponse, Task};
 use crate::error::Result;
-use crate::utils::{decode_path, ostree_ignore};
+use crate::utils::decode_path;
 
 use std::path::PathBuf;
 
 use lazy_static::lazy_static;
+use paste::paste;
 use regex::Regex;
 use rocket::response::Redirect;
 use rocket::State;
 
-#[get("/crates.io/<path..>")]
-pub async fn crates_io(
-    path: PathBuf,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.crates_io.clone();
-    let path = decode_path(&path)?.to_string();
-    let task = Task {
-        storage: "crates.io",
-        ttl: config.ttl,
-        origin,
-        path,
-    };
+macro_rules! simple_intel {
+    ($name:ident, $route:expr, $filter:ident) => {
+        paste! {
+            #[route(GET, path = "/" $route "/<path..>")]
+            pub async fn [<$name _get>](
+                path: PathBuf,
+                intel_mission: State<'_, IntelMission>,
+                config: State<'_, Config>,
+            ) -> Result<IntelResponse<'static>> {
+                let origin = config.endpoints.crates_io.clone();
+                let path = decode_path(&path)?.to_string();
+                let task = Task {
+                    storage: $route,
+                    ttl: config.ttl,
+                    origin,
+                    path,
+                };
 
-    Ok(task
-        .resolve(&intel_mission)
-        .await?
-        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
-        .await?
-        .into())
+                if !$filter(&task.path) {
+                    return Ok(Redirect::moved(task.upstream()).into());
+                }
+
+                Ok(task
+                    .resolve(&intel_mission)
+                    .await?
+                    .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
+                    .await?
+                    .into())
+            }
+
+            #[route(HEAD, path = "/" $route "/<path..>")]
+            pub async fn [<$name _head>](
+                path: PathBuf,
+                intel_mission: State<'_, IntelMission>,
+                config: State<'_, Config>,
+            ) -> Result<()> {
+                let origin = config.endpoints.crates_io.clone();
+                let path = decode_path(&path)?.to_string();
+                let task = Task {
+                    storage: $route,
+                    ttl: config.ttl,
+                    origin,
+                    path,
+                };
+
+                if !$filter(&task.path) {
+                    return Ok(());
+                }
+
+                Ok(task
+                    .resolve_no_content(&intel_mission)
+                    .await?)
+            }
+        }
+    };
 }
 
-#[get("/flathub/<path..>")]
-pub async fn flathub(
-    path: PathBuf,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.flathub.clone();
-    let path = decode_path(&path)?.to_string();
-    let task = Task {
-        storage: "flathub",
-        ttl: config.ttl,
-        origin,
-        path,
-    };
+pub fn allow_all(_path: &str) -> bool {
+    true
+}
 
-    if ostree_ignore(&task.path) {
-        return Ok(Redirect::moved(task.upstream()).into());
+pub fn ostree_allow(path: &str) -> bool {
+    !(path.starts_with("summary") || path.starts_with("config") || path.starts_with("refs/"))
+}
+
+pub fn rust_static_allow(path: &str) -> bool {
+    if path.contains("channel-") || path.ends_with(".toml") {
+        return false;
     }
 
-    Ok(task
-        .resolve(&intel_mission)
-        .await?
-        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
-        .await?
-        .into())
-}
-
-#[get("/fedora-ostree/<path..>")]
-pub async fn fedora_ostree(
-    path: PathBuf,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.fedora_ostree.clone();
-    let path = decode_path(&path)?.to_string();
-    let task = Task {
-        storage: "fedora-ostree",
-        ttl: config.ttl,
-        origin,
-        path,
-    };
-
-    if ostree_ignore(&task.path) {
-        return Ok(Redirect::moved(task.upstream()).into());
+    if !path.starts_with("dist") && !path.starts_with("rustup") {
+        return false;
     }
 
-    Ok(task
-        .resolve(&intel_mission)
-        .await?
-        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
-        .await?
-        .into())
+    true
 }
 
-#[get("/fedora-iot/<path..>")]
-pub async fn fedora_iot(
-    path: PathBuf,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.fedora_iot.clone();
-    let path = decode_path(&path)?.to_string();
-    let task = Task {
-        storage: "fedora-iot",
-        ttl: config.ttl,
-        origin,
-        path,
+pub fn wheels_allow(path: &str) -> bool {
+    path.ends_with(".whl")
+}
+
+pub fn github_releases_allow(path: &str) -> bool {
+    lazy_static! {
+        static ref REGEX: Regex =
+            Regex::new("^[^/]*/releases/download/[^/]*/[^/]*.tar.gz$").unwrap();
     };
 
-    if ostree_ignore(&task.path) {
-        return Ok(Redirect::moved(task.upstream()).into());
-    }
-
-    Ok(task
-        .resolve(&intel_mission)
-        .await?
-        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
-        .await?
-        .into())
+    REGEX.is_match(path)
 }
 
-#[get("/pypi-packages/<path..>")]
-pub async fn pypi_packages(
-    path: PathBuf,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.pypi_packages.clone();
-    let path = decode_path(&path)?.to_string();
-    let task = Task {
-        storage: "pypi-packages",
-        ttl: config.ttl,
-        origin,
-        path,
-    };
-
-    Ok(task
-        .resolve(&intel_mission)
-        .await?
-        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
-        .await?
-        .into())
-}
-
-#[get("/homebrew-bottles/<path..>")]
-pub async fn homebrew_bottles(
-    path: PathBuf,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.homebrew_bottles.clone();
-    let path = decode_path(&path)?.to_string();
-    let task = Task {
-        storage: "homebrew-bottles",
-        ttl: config.ttl,
-        origin,
-        path,
-    };
-
-    Ok(task
-        .resolve(&intel_mission)
-        .await?
-        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
-        .await?
-        .into())
-}
-
-#[get("/linuxbrew-bottles/<path..>")]
-pub async fn linuxbrew_bottles(
-    path: PathBuf,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.linuxbrew_bottles.clone();
-    let path = decode_path(&path)?.to_string();
-    let task = Task {
-        storage: "linuxbrew-bottles",
-        ttl: config.ttl,
-        origin,
-        path,
-    };
-
-    Ok(task
-        .resolve(&intel_mission)
-        .await?
-        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
-        .await?
-        .into())
-}
-
-#[get("/rust-static/<path..>")]
-pub async fn rust_static(
-    path: PathBuf,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.rustup.clone();
-    let path = decode_path(&path)?.to_string();
-    let task = Task {
-        storage: "rust-static",
-        ttl: config.ttl,
-        origin,
-        path,
-    };
-
-    if task.path.contains("channel-") || task.path.ends_with(".toml") {
-        return Ok(Redirect::moved(task.upstream()).into());
-    }
-
-    if !task.path.starts_with("dist") && !task.path.starts_with("rustup") {
-        return Ok(Redirect::moved(task.upstream()).into());
-    }
-
-    Ok(task
-        .resolve(&intel_mission)
-        .await?
-        .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
-        .await?
-        .into())
-}
+simple_intel! { crates_io, "crates.io", allow_all }
+simple_intel! { flathub, "flathub", ostree_allow }
+simple_intel! { fedora_ostree, "fedora-ostree", ostree_allow }
+simple_intel! { fedora_iot, "fedora-iot", ostree_allow }
+simple_intel! { pypi_packages, "pypi-packages", allow_all }
+simple_intel! { homebrew_bottles, "homebrew-bottles", allow_all }
+simple_intel! { linuxbrew_bottles, "linuxbrew-bottles", allow_all }
+simple_intel! { rust_static, "rust-static", rust_static_allow }
+simple_intel! { pytorch_wheels, "pytorch-wheels", wheels_allow }
+simple_intel! { sjtug_internal, "sjtug-internal", github_releases_allow }
 
 #[get("/dart-pub/<path..>")]
 pub async fn dart_pub(
@@ -275,65 +173,6 @@ pub async fn guix(
             .resolve(&intel_mission)
             .await?
             .reverse_proxy(&intel_mission)
-            .await?
-            .into())
-    } else {
-        Ok(Redirect::moved(task.upstream()).into())
-    }
-}
-
-#[get("/pytorch-wheels/<path..>")]
-pub async fn pytorch_wheels(
-    path: PathBuf,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.pytorch_wheels.clone();
-    let path = decode_path(&path)?.to_string();
-    let task = Task {
-        storage: "pytorch-wheels",
-        ttl: config.ttl,
-        origin,
-        path,
-    };
-
-    if task.path.ends_with(".whl") {
-        Ok(task
-            .resolve(&intel_mission)
-            .await?
-            .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
-            .await?
-            .into())
-    } else {
-        Ok(Redirect::moved(task.upstream()).into())
-    }
-}
-
-#[get("/sjtug-internal/<path..>")]
-pub async fn sjtug_internal(
-    path: PathBuf,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = "https://github.com/sjtug".to_string();
-    let path = decode_path(&path)?.to_string();
-    let task = Task {
-        storage: "sjtug-internal",
-        ttl: config.ttl,
-        origin,
-        path,
-    };
-
-    lazy_static! {
-        static ref REGEX: Regex =
-            Regex::new("^[^/]*/releases/download/[^/]*/[^/]*.tar.gz$").unwrap();
-    };
-
-    if REGEX.is_match(&task.path) {
-        Ok(task
-            .resolve(&intel_mission)
-            .await?
-            .stream_small_cached(config.direct_stream_size_kb, &intel_mission)
             .await?
             .into())
     } else {

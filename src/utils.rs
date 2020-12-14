@@ -13,10 +13,6 @@ use rocket::{
 };
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-pub fn ostree_ignore(path: &str) -> bool {
-    path.starts_with("summary") || path.starts_with("config") || path.starts_with("refs/")
-}
-
 pub fn decode_path(path: &PathBuf) -> Result<&str> {
     Ok(path.to_str().ok_or_else(|| Error::DecodePathError(()))?)
 }
@@ -39,6 +35,25 @@ impl Task {
         }
 
         Ok(IntelObject::Origin { task: self })
+    }
+
+    pub async fn resolve_no_content(self, mission: &IntelMission) -> Result<()> {
+        mission.metrics.resolve_counter.inc();
+        if let Ok(resp) = mission.client.head(&self.cached()).send().await {
+            if resp.status().is_success() {
+                return Ok(());
+            } else {
+                mission.metrics.task_in_queue.inc();
+                mission
+                    .tx
+                    .clone()
+                    .send(self.clone())
+                    .await
+                    .map_err(|_| Error::SendError(()))?;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn resolve_upstream(self) -> IntelObject {

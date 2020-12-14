@@ -12,10 +12,7 @@ use artifacts::download_artifacts;
 use common::{Config, IntelMission, Metrics};
 use error::{Error, Result};
 use queue::QueueLength;
-use repos::{
-    crates_io, dart_pub, fedora_iot, fedora_ostree, flathub, guix, homebrew_bottles,
-    linuxbrew_bottles, pypi_packages, pytorch_wheels, rust_static, sjtug_internal,
-};
+use repos::*;
 use slog::{info, warn};
 use storage::check_s3;
 
@@ -110,19 +107,29 @@ async fn rocket() -> rocket::Rocket {
         .mount(
             "/",
             routes![
-                crates_io,
-                flathub,
-                fedora_ostree,
-                fedora_iot,
-                pypi_packages,
-                homebrew_bottles,
-                rust_static,
+                crates_io_get,
+                crates_io_head,
+                flathub_get,
+                flathub_head,
+                fedora_ostree_get,
+                fedora_ostree_head,
+                fedora_iot_get,
+                fedora_iot_head,
+                pypi_packages_get,
+                pypi_packages_head,
+                homebrew_bottles_get,
+                homebrew_bottles_head,
+                rust_static_get,
+                rust_static_head,
                 dart_pub,
                 guix,
-                pytorch_wheels,
-                linuxbrew_bottles,
+                pytorch_wheels_get,
+                pytorch_wheels_head,
+                linuxbrew_bottles_get,
+                linuxbrew_bottles_head,
+                sjtug_internal_get,
+                sjtug_internal_head,
                 metrics,
-                sjtug_internal
             ],
         )
 }
