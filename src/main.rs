@@ -4,6 +4,7 @@ mod artifacts;
 mod common;
 mod error;
 mod intel_path;
+mod intel_query;
 mod queue;
 mod repos;
 mod storage;

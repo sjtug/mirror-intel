@@ -1,6 +1,7 @@
 use crate::common::{Config, IntelMission, IntelResponse, Task};
 use crate::error::Result;
 use crate::intel_path::IntelPath;
+use crate::intel_query::IntelQuery;
 use crate::utils::decode_path;
 
 use std::path::PathBuf;
@@ -14,9 +15,10 @@ use rocket::State;
 macro_rules! simple_intel {
     ($name:ident, $route:expr, $filter:ident) => {
         paste! {
-            #[route(GET, path = "/" $route "/<path..>")]
+            #[route(GET, path = "/" $route "/<path..>?<query..>")]
             pub async fn [<$name _get>](
                 path: IntelPath,
+                query: IntelQuery,
                 intel_mission: State<'_, IntelMission>,
                 config: State<'_, Config>,
             ) -> Result<IntelResponse<'static>> {
@@ -28,6 +30,10 @@ macro_rules! simple_intel {
                     origin,
                     path,
                 };
+
+                if !query.is_empty() {
+                    return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+                }
 
                 if !$filter(&task.path) {
                     return Ok(Redirect::moved(task.upstream()).into());
@@ -41,9 +47,10 @@ macro_rules! simple_intel {
                     .into())
             }
 
-            #[route(HEAD, path = "/" $route "/<path..>")]
+            #[route(HEAD, path = "/" $route "/<path..>?<query..>")]
             pub async fn [<$name _head>](
                 path: IntelPath,
+                query: IntelQuery,
                 intel_mission: State<'_, IntelMission>,
                 config: State<'_, Config>,
             ) -> Result<Redirect> {
@@ -56,6 +63,9 @@ macro_rules! simple_intel {
                     path,
                 };
 
+                if !query.is_empty() {
+                    return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+                }
 
                 if !$filter(&task.path) {
                     return Ok(Redirect::moved(task.upstream()));
@@ -225,7 +235,7 @@ mod tests {
             .manage(config.clone())
             .attach(queue_length_fairing)
             .register(catchers![not_found])
-            .mount("/", routes![sjtug_internal_get, sjtug_internal_head]);
+            .mount("/", routes![sjtug_internal_head, sjtug_internal_get]);
 
         (
             Client::tracked(rocket)
@@ -370,5 +380,25 @@ mod tests {
         };
         let response = client.head(object.root_path()).dispatch().await;
         assert_eq!(response.status(), Status::NotFound);
+    }
+
+    #[rocket::async_test]
+    async fn test_url_segment_query() {
+        // this case is to test if we could process escaped URL correctly
+        let (client, _, _rx) = make_rocket().await;
+        let object = Task {
+            storage: "sjtug-internal",
+            origin: "https://github.com/sjtug".to_string(),
+            path:
+                "mirror-clone/releases/download/v0.1.7/mirror-clone.tar.gz?ci=233333&ci2=23333333"
+                    .to_string(),
+            ttl: 3,
+        };
+        let response = client.get(object.root_path()).dispatch().await;
+        assert_eq!(response.status(), Status::Found);
+        assert_eq!(
+            response.headers().get("Location").collect::<Vec<&str>>(),
+            vec![&object.upstream()]
+        );
     }
 }

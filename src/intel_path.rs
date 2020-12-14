@@ -37,7 +37,7 @@ impl<'a> FromSegments<'a> for IntelPath {
             }
         }
 
-        Ok(IntelPath(buf.into_os_string().into_string().unwrap()))
+        Ok(Self(buf.into_os_string().into_string().unwrap()))
     }
 }
 
