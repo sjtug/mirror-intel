@@ -4,6 +4,7 @@ mod artifacts;
 mod common;
 mod error;
 mod intel_path;
+mod intel_query;
 mod queue;
 mod repos;
 mod storage;
@@ -126,6 +127,8 @@ async fn rocket() -> rocket::Rocket {
                 linuxbrew_bottles_head,
                 sjtug_internal_get,
                 sjtug_internal_head,
+                flutter_infra_get,
+                flutter_infra_head,
                 metrics,
             ],
         )

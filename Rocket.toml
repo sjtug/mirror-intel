@@ -24,6 +24,7 @@ dart_pub = "https://mirrors.tuna.tsinghua.edu.cn/dart-pub"
 guix = "https://ci.guix.gnu.org"
 pytorch_wheels = "https://download.pytorch.org/whl"
 sjtug_internal = "https://github.com/sjtug"
+flutter_infra = "https://storage.googleapis.com/flutter_infra"
 
 [default.s3]
 endpoint = "https://s3.jcloud.sjtu.edu.cn"
