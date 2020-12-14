@@ -1,5 +1,6 @@
 use crate::common::{Config, IntelMission, IntelResponse, Task};
 use crate::error::Result;
+use crate::intel_path::IntelPath;
 use crate::utils::decode_path;
 
 use std::path::PathBuf;
@@ -15,12 +16,12 @@ macro_rules! simple_intel {
         paste! {
             #[route(GET, path = "/" $route "/<path..>")]
             pub async fn [<$name _get>](
-                path: PathBuf,
+                path: IntelPath,
                 intel_mission: State<'_, IntelMission>,
                 config: State<'_, Config>,
             ) -> Result<IntelResponse<'static>> {
                 let origin = config.endpoints.$name.clone();
-                let path = decode_path(&path)?.to_string();
+                let path = path.into();
                 let task = Task {
                     storage: $route,
                     ttl: config.ttl,
@@ -42,12 +43,12 @@ macro_rules! simple_intel {
 
             #[route(HEAD, path = "/" $route "/<path..>")]
             pub async fn [<$name _head>](
-                path: PathBuf,
+                path: IntelPath,
                 intel_mission: State<'_, IntelMission>,
                 config: State<'_, Config>,
             ) -> Result<Redirect> {
                 let origin = config.endpoints.$name.clone();
-                let path = decode_path(&path)?.to_string();
+                let path = path.into();
                 let task = Task {
                     storage: $route,
                     ttl: config.ttl,
@@ -337,5 +338,37 @@ mod tests {
             response.headers().get("Location").collect::<Vec<&str>>(),
             vec![&object.upstream()]
         );
+    }
+
+    #[rocket::async_test]
+    async fn test_url_segment() {
+        // this case is to test if we could process escaped URL correctly
+        let (client, _, _rx) = make_rocket().await;
+        let object = Task {
+            storage: "sjtug-internal",
+            origin: "https://github.com/sjtug".to_string(),
+            path: "mirror-clone/releases/download/v0.1.7/mirror%2B%2B%2B-clone.tar.gz".to_string(),
+            ttl: 3,
+        };
+        let response = client.head(object.root_path()).dispatch().await;
+        assert_eq!(response.status(), Status::Found);
+        assert_eq!(
+            response.headers().get("Location").collect::<Vec<&str>>(),
+            vec![&object.upstream()]
+        );
+    }
+
+    #[rocket::async_test]
+    async fn test_url_segment_fail() {
+        // this case is to test if we could process escaped URL correctly
+        let (client, _, _rx) = make_rocket().await;
+        let object = Task {
+            storage: "sjtug-internal",
+            origin: "https://github.com/sjtug".to_string(),
+            path: "mirror-clone/releases/download/v0.1.7/.mirror%2B%2B%2B-clone.tar.gz".to_string(),
+            ttl: 3,
+        };
+        let response = client.head(object.root_path()).dispatch().await;
+        assert_eq!(response.status(), Status::NotFound);
     }
 }
