@@ -114,8 +114,7 @@ pub fn github_releases_allow(path: &str) -> bool {
 
 pub fn flutter_allow(path: &str) -> bool {
     lazy_static! {
-        static ref REGEX: Regex =
-            Regex::new("releases_.*json").unwrap();
+        static ref REGEX: Regex = Regex::new("releases_.*json").unwrap();
     };
 
     !REGEX.is_match(path)
@@ -416,7 +415,11 @@ mod tests {
     fn test_flutter_allow() {
         assert!(!flutter_allow("releases/releases_windows.json"));
         assert!(!flutter_allow("releases/releases_linux.json"));
-        assert!(flutter_allow("releases/stable/linux/flutter_linux_1.17.0-stable.tar.xz"));
-        assert!(flutter_allow("flutter/069b3cf8f093d44ec4bae1319cbfdc4f8b4753b6/android-arm/artifacts.zip"));
+        assert!(flutter_allow(
+            "releases/stable/linux/flutter_linux_1.17.0-stable.tar.xz"
+        ));
+        assert!(flutter_allow(
+            "flutter/069b3cf8f093d44ec4bae1319cbfdc4f8b4753b6/android-arm/artifacts.zip"
+        ));
     }
 }

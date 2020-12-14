@@ -104,7 +104,7 @@ pub struct Endpoints {
     pub pytorch_wheels: String,
     pub linuxbrew_bottles: String,
     pub sjtug_internal: String,
-    pub flutter_infra: String
+    pub flutter_infra: String,
 }
 
 #[derive(Clone, Deserialize, Debug)]
