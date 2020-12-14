@@ -112,6 +112,15 @@ pub fn github_releases_allow(path: &str) -> bool {
     REGEX.is_match(path)
 }
 
+pub fn flutter_allow(path: &str) -> bool {
+    lazy_static! {
+        static ref REGEX: Regex =
+            Regex::new("releases_.*json").unwrap();
+    };
+
+    !REGEX.is_match(path)
+}
+
 simple_intel! { crates_io, "crates.io", allow_all }
 simple_intel! { flathub, "flathub", ostree_allow }
 simple_intel! { fedora_ostree, "fedora-ostree", ostree_allow }
@@ -122,6 +131,7 @@ simple_intel! { linuxbrew_bottles, "linuxbrew-bottles", allow_all }
 simple_intel! { rust_static, "rust-static", rust_static_allow }
 simple_intel! { pytorch_wheels, "pytorch-wheels", wheels_allow }
 simple_intel! { sjtug_internal, "sjtug-internal", github_releases_allow }
+simple_intel! { flutter_infra, "flutter-infra", flutter_allow }
 
 #[get("/dart-pub/<path..>")]
 pub async fn dart_pub(
@@ -400,5 +410,13 @@ mod tests {
             response.headers().get("Location").collect::<Vec<&str>>(),
             vec![&object.upstream()]
         );
+    }
+
+    #[test]
+    fn test_flutter_allow() {
+        assert!(!flutter_allow("releases/releases_windows.json"));
+        assert!(!flutter_allow("releases/releases_linux.json"));
+        assert!(flutter_allow("releases/stable/linux/flutter_linux_1.17.0-stable.tar.xz"));
+        assert!(flutter_allow("flutter/069b3cf8f093d44ec4bae1319cbfdc4f8b4753b6/android-arm/artifacts.zip"));
     }
 }
