@@ -134,12 +134,12 @@ simple_intel! { flutter_infra, "flutter_infra", flutter_allow }
 
 #[get("/dart-pub/<path..>")]
 pub async fn dart_pub(
-    path: PathBuf,
+    path: IntelPath,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
 ) -> Result<IntelResponse<'static>> {
     let origin = config.endpoints.dart_pub.clone();
-    let path = decode_path(&path)?.to_string();
+    let path = path.into();
     let task = Task {
         storage: "dart-pub",
         ttl: config.ttl,
@@ -147,9 +147,7 @@ pub async fn dart_pub(
         path,
     };
 
-    if task.path == "api/packages" {
-        Ok(Redirect::moved(task.upstream()).into())
-    } else if task.path.starts_with("api/") {
+    if task.path.starts_with("api/") {
         Ok(task
             .resolve_upstream()
             .rewrite_upstream(
@@ -172,14 +170,14 @@ pub async fn dart_pub(
 
 #[get("/guix/<path..>")]
 pub async fn guix(
-    path: PathBuf,
+    path: IntelPath,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
 ) -> Result<IntelResponse<'static>> {
     let origin = config.endpoints.guix.clone();
-    let path = decode_path(&path)?.to_string();
+    let path = path.into();
     let task = Task {
-        storage: "guix-test",
+        storage: "guix",
         ttl: config.ttl,
         origin,
         path,
