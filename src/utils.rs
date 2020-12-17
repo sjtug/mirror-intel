@@ -2,7 +2,6 @@ use crate::common::{Config, IntelMission, IntelObject, IntelResponse, Task};
 use crate::error::{Error, Result};
 
 use std::io::Cursor;
-use std::path::PathBuf;
 
 use futures::stream::TryStreamExt;
 use response::ResponseBuilder;
@@ -12,10 +11,6 @@ use rocket::{
     Response,
 };
 use tokio_util::compat::FuturesAsyncReadCompatExt;
-
-pub fn decode_path(path: &PathBuf) -> Result<&str> {
-    Ok(path.to_str().ok_or_else(|| Error::DecodePathError(()))?)
-}
 
 impl Task {
     async fn resolve_internal(
