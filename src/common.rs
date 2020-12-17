@@ -6,6 +6,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc::Sender;
 
 use std::sync::Arc;
+
 #[derive(Debug, Clone)]
 pub struct Task {
     pub storage: &'static str,

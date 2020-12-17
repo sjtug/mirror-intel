@@ -2,9 +2,6 @@ use crate::common::{Config, IntelMission, IntelResponse, Task};
 use crate::error::Result;
 use crate::intel_path::IntelPath;
 use crate::intel_query::IntelQuery;
-use crate::utils::decode_path;
-
-use std::path::PathBuf;
 
 use lazy_static::lazy_static;
 use paste::paste;
@@ -120,21 +117,26 @@ pub fn flutter_allow(path: &str) -> bool {
     !REGEX.is_match(path)
 }
 
+pub fn linuxbrew_allow(path: &str) -> bool {
+    path.contains(".x86_64_linux")
+}
+
 simple_intel! { crates_io, "crates.io", allow_all }
 simple_intel! { flathub, "flathub", ostree_allow }
 simple_intel! { fedora_ostree, "fedora-ostree", ostree_allow }
 simple_intel! { fedora_iot, "fedora-iot", ostree_allow }
 simple_intel! { pypi_packages, "pypi-packages", allow_all }
 simple_intel! { homebrew_bottles, "homebrew-bottles", allow_all }
-simple_intel! { linuxbrew_bottles, "linuxbrew-bottles", allow_all }
+simple_intel! { linuxbrew_bottles, "linuxbrew-bottles", linuxbrew_allow }
 simple_intel! { rust_static, "rust-static", rust_static_allow }
 simple_intel! { pytorch_wheels, "pytorch-wheels", wheels_allow }
 simple_intel! { sjtug_internal, "sjtug-internal", github_releases_allow }
 simple_intel! { flutter_infra, "flutter_infra", flutter_allow }
 
-#[get("/dart-pub/<path..>")]
+#[get("/dart-pub/<path..>?<query..>")]
 pub async fn dart_pub(
     path: IntelPath,
+    query: IntelQuery,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
 ) -> Result<IntelResponse<'static>> {
@@ -146,6 +148,10 @@ pub async fn dart_pub(
         origin: origin.clone(),
         path,
     };
+
+    if !query.is_empty() {
+        return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+    }
 
     if task.path.starts_with("api/") {
         Ok(task
@@ -168,9 +174,10 @@ pub async fn dart_pub(
     }
 }
 
-#[get("/guix/<path..>")]
+#[get("/guix/<path..>?<query..>")]
 pub async fn guix(
     path: IntelPath,
+    query: IntelQuery,
     intel_mission: State<'_, IntelMission>,
     config: State<'_, Config>,
 ) -> Result<IntelResponse<'static>> {
@@ -182,6 +189,10 @@ pub async fn guix(
         origin,
         path,
     };
+
+    if !query.is_empty() {
+        return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+    }
 
     if task.path.starts_with("nar/") {
         Ok(task
