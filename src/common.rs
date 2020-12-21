@@ -127,6 +127,7 @@ pub struct Config {
     pub ttl: usize,
     pub direct_stream_size_kb: u64,
     pub read_only: bool,
+    pub download_timeout: u64,
 }
 
 #[derive(Debug, Responder)]
