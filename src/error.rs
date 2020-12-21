@@ -28,6 +28,8 @@ pub enum Error {
     InvalidRequest(()),
     #[error("List Objects Error {0}")]
     ListObjectsError(#[from] rusoto_core::RusotoError<rusoto_s3::ListObjectsError>),
+    #[error("Timeout")]
+    Timeout(()),
 }
 
 impl<'r> Responder<'r, 'static> for Error {

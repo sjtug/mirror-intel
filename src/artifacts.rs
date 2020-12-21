@@ -136,6 +136,16 @@ async fn process_task(
     config: &Config,
     logger: slog::Logger,
 ) -> Result<()> {
+    if client
+        .head(&task.cached(config))
+        .send()
+        .await?
+        .status()
+        .is_success()
+    {
+        info!(logger, "already exists");
+        return Ok(());
+    }
     let (content_length, stream) =
         stream_from_url(client, task.upstream(), config, logger.clone()).await?;
     info!(logger, "get length={}", content_length);
@@ -253,7 +263,12 @@ pub async fn download_artifacts(
             let mut task_new = task.clone();
 
             info!(logger, "begin stream");
-            if let Err(err) = process_task(task, client, &config, logger.clone()).await {
+            let task_fut = process_task(task, client, &config, logger.clone());
+            let task_fut = tokio::time::timeout(
+                std::time::Duration::from_secs(config.download_timeout),
+                task_fut,
+            );
+            if let Err(err) = task_fut.await.unwrap_or_else(|_| Err(Error::Timeout(()))) {
                 warn!(logger, "{:?}, ttl={}", err, task_new.ttl);
                 task_new.ttl -= 1;
                 metrics.failed_download_counter.inc();
