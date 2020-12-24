@@ -213,11 +213,13 @@ pub async fn download_artifacts(
     let config = Arc::new(config.clone());
 
     loop {
-        let task: Task;
+        let mut task: Task;
         tokio::select! {
             val = fail_rx.next() => { if let Some(val) = val { task = val; } else { break; } }
             val = rx.next() => { if let Some(val) = val { task = val; } else { break; } }
         }
+
+        task.to_download_task(&config.endpoints.overrides);
 
         metrics.task_in_queue.dec();
 

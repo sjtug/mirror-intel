@@ -30,6 +30,16 @@ impl Task {
     pub fn root_path(&self) -> String {
         format!("/{}/{}", self.storage, self.path)
     }
+
+    pub fn to_download_task(&mut self, overrides: &[EndpointOverride]) {
+        for endpoint_override in overrides {
+            if self.origin.contains(&endpoint_override.pattern) {
+                self.origin = self
+                    .origin
+                    .replace(&endpoint_override.pattern, &endpoint_override.replace);
+            }
+        }
+    }
 }
 
 pub struct Metrics {
@@ -92,6 +102,13 @@ pub struct IntelMission {
 }
 
 #[derive(Clone, Deserialize, Debug)]
+pub struct EndpointOverride {
+    pub name: String,
+    pub pattern: String,
+    pub replace: String,
+}
+
+#[derive(Clone, Deserialize, Debug)]
 pub struct Endpoints {
     pub rust_static: String,
     pub homebrew_bottles: String,
@@ -106,6 +123,7 @@ pub struct Endpoints {
     pub linuxbrew_bottles: String,
     pub sjtug_internal: String,
     pub flutter_infra: String,
+    pub overrides: Vec<EndpointOverride>,
 }
 
 #[derive(Clone, Deserialize, Debug)]
