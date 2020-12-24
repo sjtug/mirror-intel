@@ -110,11 +110,34 @@ pub fn github_releases_allow(path: &str) -> bool {
 }
 
 pub fn flutter_allow(path: &str) -> bool {
-    lazy_static! {
-        static ref REGEX: Regex = Regex::new("releases_.*json").unwrap();
-    };
+    if path.starts_with("releases/") {
+        return !path.ends_with(".json");
+    }
 
-    !REGEX.is_match(path)
+    if path.starts_with("flutter/") {
+        if path.ends_with("lcov.info") {
+            return false;
+        }
+        return true;
+    }
+
+    if path.starts_with("android/") {
+        return true;
+    }
+
+    if path.starts_with("gradle-wrapper/") {
+        return true;
+    }
+
+    if path.starts_with("ios-usb-dependencies/") {
+        return true;
+    }
+
+    if path.starts_with("mingit/") {
+        return true;
+    }
+
+    false
 }
 
 pub fn linuxbrew_allow(path: &str) -> bool {
@@ -430,5 +453,9 @@ mod tests {
         assert!(flutter_allow(
             "flutter/069b3cf8f093d44ec4bae1319cbfdc4f8b4753b6/android-arm/artifacts.zip"
         ));
+        assert!(flutter_allow(
+            "flutter/fonts/03bdd42a57aff5c496859f38d29825843d7fe68e/fonts.zip"
+        ));
+        assert!(!flutter_allow("flutter/coverage/lcov.info"));
     }
 }
