@@ -130,6 +130,7 @@ async fn rocket() -> rocket::Rocket {
                 flutter_infra_get,
                 flutter_infra_head,
                 metrics,
+                index
             ],
         )
 }

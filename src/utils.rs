@@ -191,5 +191,9 @@ impl<'a> IntelResponse<'a> {
 
 #[catch(404)]
 pub fn not_found(req: &rocket::Request) -> String {
-    format!("No route for {}. mirror-intel uses S3-like storage backend, which means that you could not browse files like other mirror sites. Please follow our instructions to set up your software registry.", req.uri())
+    no_route_for(&req.uri().to_string())
+}
+
+pub fn no_route_for(route: &str) -> String {
+    format!("No route for {}. mirror-intel uses S3-like storage backend, which means that you could not browse files like other mirror sites. Please follow our instructions to set up your software registry.", route)
 }

@@ -1,13 +1,16 @@
-use crate::common::{Config, IntelMission, IntelResponse, Task};
 use crate::error::Result;
 use crate::intel_path::IntelPath;
 use crate::intel_query::IntelQuery;
+use crate::{
+    common::{Config, IntelMission, IntelResponse, Task},
+    utils,
+};
 
 use lazy_static::lazy_static;
 use paste::paste;
 use regex::Regex;
-use rocket::response::Redirect;
 use rocket::State;
+use rocket::{http::RawStr, response::Redirect};
 
 macro_rules! simple_intel {
     ($name:ident, $route:expr, $filter:ident) => {
@@ -234,6 +237,11 @@ pub async fn guix(
     } else {
         Ok(Redirect::moved(task.upstream()).into())
     }
+}
+
+#[get("/<path>")]
+pub async fn index(path: &RawStr) -> String {
+    utils::no_route_for(path)
 }
 
 #[cfg(test)]
