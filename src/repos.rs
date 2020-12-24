@@ -238,7 +238,7 @@ pub async fn guix(
 
 #[cfg(test)]
 mod tests {
-    use crate::common::{Config, IntelMission, Metrics};
+    use crate::common::{Config, EndpointOverride, IntelMission, Metrics};
     use crate::queue::QueueLength;
     use crate::utils::not_found;
     use reqwest::ClientBuilder;
@@ -457,5 +457,21 @@ mod tests {
             "flutter/fonts/03bdd42a57aff5c496859f38d29825843d7fe68e/fonts.zip"
         ));
         assert!(!flutter_allow("flutter/coverage/lcov.info"));
+    }
+
+    #[test]
+    fn test_task_override() {
+        let mut task = Task {
+            storage: "flutter_infra",
+            ttl: 233,
+            origin: "https://storage.flutter-io.cn/".to_string(),
+            path: "test".to_string(),
+        };
+        task.to_download_task(&[EndpointOverride {
+            name: "flutter".to_string(),
+            pattern: "https://storage.flutter-io.cn/".to_string(),
+            replace: "https://storage.googleapis.com/".to_string(),
+        }]);
+        assert_eq!(task.origin, "https://storage.googleapis.com/");
     }
 }
