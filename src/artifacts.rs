@@ -149,7 +149,8 @@ async fn process_task(
     let (content_length, stream) =
         stream_from_url(client, task.upstream(), config, logger.clone()).await?;
     info!(logger, "get length={}", content_length);
-    let key = format!("{}/{}", task.storage, task.path);
+    // workaround for pytorch-wheels, we'll look into a better solution later
+    let key = format!("{}/{}", task.storage, task.path.replace("%2B", "+"));
     stream_to_s3(
         &key,
         content_length,
