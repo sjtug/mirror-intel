@@ -13,7 +13,7 @@ use rocket::State;
 use rocket::{http::RawStr, response::Redirect};
 
 macro_rules! simple_intel {
-    ($name:ident, $route:expr, $filter:ident) => {
+    ($name:ident, $route:expr, $filter:ident, $proxy:ident) => {
         paste! {
             #[route(GET, path = "/" $route "/<path..>?<query..>")]
             pub async fn [<$name _get>](
@@ -39,6 +39,14 @@ macro_rules! simple_intel {
                     return Ok(Redirect::moved(task.upstream()).into());
                 }
 
+                if $proxy(&task.path) {
+                    return Ok(task
+                        .resolve_upstream()
+                        .reverse_proxy(&intel_mission)
+                        .await?
+                        .into());
+                }
+
                 Ok(task
                     .resolve(&intel_mission, &config)
                     .await?
@@ -53,7 +61,7 @@ macro_rules! simple_intel {
                 query: IntelQuery,
                 intel_mission: State<'_, IntelMission>,
                 config: State<'_, Config>,
-            ) -> Result<Redirect> {
+            ) -> Result<IntelResponse<'static>> {
                 let origin = config.endpoints.$name.clone();
                 let path = path.into();
                 let task = Task {
@@ -68,15 +76,27 @@ macro_rules! simple_intel {
                 }
 
                 if !$filter(&task.path) {
-                    return Ok(Redirect::moved(task.upstream()));
+                    return Ok(Redirect::moved(task.upstream()).into());
+                }
+
+                if $proxy(&task.path) {
+                    return Ok(rocket::Response::build()
+                        .status(rocket::http::Status::Ok)
+                        .finalize()
+                        .into());
                 }
 
                 Ok(task
                     .resolve_no_content(&intel_mission, &config).await?
-                    .redirect(&config))
+                    .redirect(&config)
+                    .into())
             }
         }
     };
+}
+
+pub fn disallow_all(_path: &str) -> bool {
+    false
 }
 
 pub fn allow_all(_path: &str) -> bool {
@@ -100,7 +120,7 @@ pub fn rust_static_allow(path: &str) -> bool {
 }
 
 pub fn wheels_allow(path: &str) -> bool {
-    path.ends_with(".whl")
+    path.ends_with(".whl") || path.ends_with(".html")
 }
 
 pub fn github_releases_allow(path: &str) -> bool {
@@ -147,17 +167,21 @@ pub fn linuxbrew_allow(path: &str) -> bool {
     path.contains(".x86_64_linux")
 }
 
-simple_intel! { crates_io, "crates.io", allow_all }
-simple_intel! { flathub, "flathub", ostree_allow }
-simple_intel! { fedora_ostree, "fedora-ostree", ostree_allow }
-simple_intel! { fedora_iot, "fedora-iot", ostree_allow }
-simple_intel! { pypi_packages, "pypi-packages", allow_all }
-simple_intel! { homebrew_bottles, "homebrew-bottles", allow_all }
-simple_intel! { linuxbrew_bottles, "linuxbrew-bottles", linuxbrew_allow }
-simple_intel! { rust_static, "rust-static", rust_static_allow }
-simple_intel! { pytorch_wheels, "pytorch-wheels", wheels_allow }
-simple_intel! { sjtug_internal, "sjtug-internal", github_releases_allow }
-simple_intel! { flutter_infra, "flutter_infra", flutter_allow }
+pub fn wheels_proxy(path: &str) -> bool {
+    path.ends_with(".html")
+}
+
+simple_intel! { crates_io, "crates.io", allow_all, disallow_all }
+simple_intel! { flathub, "flathub", ostree_allow, disallow_all }
+simple_intel! { fedora_ostree, "fedora-ostree", ostree_allow, disallow_all }
+simple_intel! { fedora_iot, "fedora-iot", ostree_allow, disallow_all }
+simple_intel! { pypi_packages, "pypi-packages", allow_all, disallow_all }
+simple_intel! { homebrew_bottles, "homebrew-bottles", allow_all, disallow_all }
+simple_intel! { linuxbrew_bottles, "linuxbrew-bottles", linuxbrew_allow, disallow_all }
+simple_intel! { rust_static, "rust-static", rust_static_allow, disallow_all }
+simple_intel! { pytorch_wheels, "pytorch-wheels", wheels_allow, wheels_proxy }
+simple_intel! { sjtug_internal, "sjtug-internal", github_releases_allow, disallow_all }
+simple_intel! { flutter_infra, "flutter_infra", flutter_allow, disallow_all }
 
 #[get("/dart-pub/<path..>?<query..>")]
 pub async fn dart_pub(
@@ -284,7 +308,15 @@ mod tests {
             .manage(config.clone())
             .attach(queue_length_fairing)
             .register(catchers![not_found])
-            .mount("/", routes![sjtug_internal_head, sjtug_internal_get]);
+            .mount(
+                "/",
+                routes![
+                    sjtug_internal_head,
+                    sjtug_internal_get,
+                    pytorch_wheels_head,
+                    pytorch_wheels_get
+                ],
+            );
 
         (
             Client::tracked(rocket)
@@ -481,5 +513,19 @@ mod tests {
             replace: "https://storage.googleapis.com/".to_string(),
         }]);
         assert_eq!(task.origin, "https://storage.googleapis.com/");
+    }
+
+    #[rocket::async_test]
+    async fn test_proxy_head() {
+        // if an object doesn't exist in s3, we should temporarily redirect users to upstream
+        let (client, _, _rx) = make_rocket().await;
+        let object = Task {
+            storage: "pytorch-wheels",
+            origin: "https://download.pytorch.org/whl".to_string(),
+            path: "torch_stable.html".to_string(),
+            ttl: 3,
+        };
+        let response = client.head(object.root_path()).dispatch().await;
+        assert_eq!(response.status(), Status::Ok);
     }
 }

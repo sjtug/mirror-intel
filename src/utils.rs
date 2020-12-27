@@ -129,6 +129,11 @@ impl IntelObject {
                 if let Some(content_length) = resp.content_length() {
                     intel_response.raw_header("content-length", content_length.to_string());
                 }
+                if let Some(content_type) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
+                    if let Ok(content_type) = content_type.to_str() {
+                        intel_response.raw_header("content-type", content_type.to_string());
+                    }
+                }
                 Self::set_status(&mut intel_response, &resp);
                 intel_response.streamed_body(
                     resp.bytes_stream()
@@ -143,6 +148,11 @@ impl IntelObject {
                 let mut intel_response = Response::build();
                 if let Some(content_length) = resp.content_length() {
                     intel_response.raw_header("content-length", content_length.to_string());
+                }
+                if let Some(content_type) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
+                    if let Ok(content_type) = content_type.to_str() {
+                        intel_response.raw_header("content-type", content_type.to_string());
+                    }
                 }
                 Self::set_status(&mut intel_response, &resp);
                 intel_response.streamed_body(
