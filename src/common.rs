@@ -1,9 +1,10 @@
 use prometheus::{IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
 use reqwest::Client;
-
 use rocket::response;
 use serde::Deserialize;
 use tokio::sync::mpsc::Sender;
+
+use crate::{Error, Result};
 
 use std::sync::Arc;
 
@@ -29,6 +30,15 @@ impl Task {
 
     pub fn root_path(&self) -> String {
         format!("/{}/{}", self.storage, self.path)
+    }
+
+    pub fn s3_key(&self) -> Result<String> {
+        Ok(format!(
+            "{}/{}",
+            self.storage,
+            rocket::http::uri::Uri::percent_decode(self.path.as_bytes())
+                .map_err(|_| Error::DecodePathError(()))?
+        ))
     }
 
     pub fn to_download_task(&mut self, overrides: &[EndpointOverride]) {

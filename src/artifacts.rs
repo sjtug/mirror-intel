@@ -20,7 +20,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio_util::codec;
 
-use slog::{info, o, warn};
+use slog::{debug, info, o, warn};
 
 type IoResult = std::result::Result<Bytes, std::io::Error>;
 
@@ -149,8 +149,8 @@ async fn process_task(
     let (content_length, stream) =
         stream_from_url(client, task.upstream(), config, logger.clone()).await?;
     info!(logger, "get length={}", content_length);
-    let key = format!("{}/{}", task.storage, task.path);
-    stream_to_s3(
+    let key = task.s3_key()?;
+    let result = stream_to_s3(
         &key,
         content_length,
         rusoto_s3::StreamingBody::new(stream),
@@ -158,6 +158,7 @@ async fn process_task(
     )
     .await?;
     info!(logger, "upload to bucket");
+    debug!(logger, "{:?}", result);
     Ok(())
 }
 
