@@ -3,12 +3,12 @@ address = "0.0.0.0"
 concurrent_download = 256
 max_pending_task = 16384
 user_agent = "mirror-intel / 0.1 (siyuan.internal.sjtug.org)"
-file_threshold_mb = 0
+file_threshold_mb = 4
 ignore_threshold_mb = 1024
 base_url = "https://mirrors.sjtug.sjtu.edu.cn"
 ttl = 3
 direct_stream_size_kb = 4
-read_only = true
+read_only = false
 download_timeout = 60
 # log_level = "off"
 
