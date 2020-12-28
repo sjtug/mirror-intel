@@ -53,8 +53,9 @@ pub async fn list(
     req.bucket = config.s3.bucket.clone();
     req.prefix = Some(path_slash.clone());
     req.delimiter = Some("/".to_string());
+    req.max_keys = Some(100);
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
+        std::time::Duration::from_secs(5),
         intel_mission.s3_client.list_objects(req),
     )
     .await

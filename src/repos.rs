@@ -214,13 +214,15 @@ pub async fn dart_pub(
             )
             .await?
             .into())
-    } else {
+    } else if task.path.starts_with("packages/") {
         Ok(task
             .resolve(&intel_mission, &config)
             .await?
             .stream_small_cached(config.direct_stream_size_kb, &intel_mission, &config)
             .await?
             .into())
+    } else {
+        Ok(Redirect::moved(task.upstream()).into())
     }
 }
 
