@@ -1,14 +1,28 @@
 use crate::error::{Error, Result};
 
+use rusoto_core::credential::{AwsCredentials, StaticProvider};
+use rusoto_core::Region;
 use rusoto_s3::{S3Client, S3};
 use std::time::Duration;
 use tokio::time::timeout;
 
-fn get_s3_client() -> S3Client {
-    S3Client::new(rusoto_core::Region::Custom {
+fn jcloud_region() -> Region {
+    Region::Custom {
         name: "jCloud S3".to_string(),
         endpoint: "https://s3.jcloud.sjtu.edu.cn".to_string(),
-    })
+    }
+}
+
+fn get_s3_client() -> S3Client {
+    S3Client::new(jcloud_region())
+}
+
+pub fn get_anonymous_s3_client() -> S3Client {
+    S3Client::new_with(
+        rusoto_core::request::HttpClient::new().expect("Failed to creat HTTP client"),
+        StaticProvider::from(AwsCredentials::default()),
+        jcloud_region(),
+    )
 }
 
 pub async fn stream_to_s3(
@@ -28,7 +42,7 @@ pub async fn stream_to_s3(
 }
 
 pub async fn check_s3(bucket: &str) -> Result<()> {
-    Ok(timeout(Duration::from_secs(3), async move {
+    Ok(timeout(Duration::from_secs(1), async move {
         let s3_client = get_s3_client();
         let mut req = rusoto_s3::ListObjectsRequest::default();
         req.bucket = bucket.to_string();

@@ -200,10 +200,23 @@ impl<'a> IntelResponse<'a> {
 }
 
 #[catch(404)]
-pub fn not_found(req: &rocket::Request) -> String {
+pub fn not_found(req: &rocket::Request) -> Response<'static> {
     no_route_for(&req.uri().to_string())
 }
 
-pub fn no_route_for(route: &str) -> String {
-    format!("No route for {}. mirror-intel uses S3-like storage backend, which means that you could not browse files like other mirror sites. Please follow our instructions to set up your software registry.", route)
+pub fn no_route_for(route: &str) -> Response<'static> {
+    let mut resp = Response::build();
+    let body = format!(
+        r#"<p>No route for {}.</p>
+            <p>mirror-intel uses S3-like storage backend,
+            which means that you could not browse files like other mirror
+            sites. Please follow our instructions to set up your software
+            registry. If you intend to browse, we have provided an experimental
+            API to browse bucket.</p>
+            <p><a href="/{}?mirror_intel_list">Browse {}</a></p>"#,
+        route, route, route
+    );
+    resp.sized_body(body.len(), Cursor::new(body));
+    resp.header(ContentType::HTML);
+    resp.finalize()
 }

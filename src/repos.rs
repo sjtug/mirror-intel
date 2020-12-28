@@ -214,13 +214,15 @@ pub async fn dart_pub(
             )
             .await?
             .into())
-    } else {
+    } else if task.path.starts_with("packages/") {
         Ok(task
             .resolve(&intel_mission, &config)
             .await?
             .stream_small_cached(config.direct_stream_size_kb, &intel_mission, &config)
             .await?
             .into())
+    } else {
+        Ok(Redirect::moved(task.upstream()).into())
     }
 }
 
@@ -264,15 +266,18 @@ pub async fn guix(
 }
 
 #[get("/<path>")]
-pub async fn index(path: &RawStr) -> String {
+pub async fn index(path: &RawStr) -> rocket::Response<'static> {
     utils::no_route_for(path)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::common::{Config, EndpointOverride, IntelMission, Metrics};
     use crate::queue::QueueLength;
     use crate::utils::not_found;
+    use crate::{
+        common::{Config, EndpointOverride, IntelMission, Metrics},
+        storage::get_anonymous_s3_client,
+    };
     use reqwest::ClientBuilder;
     use rocket::http::Status;
     use std::sync::Arc;
@@ -297,6 +302,7 @@ mod tests {
             tx,
             client,
             metrics: Arc::new(Metrics::new()),
+            s3_client: Arc::new(get_anonymous_s3_client()),
         };
 
         let queue_length_fairing = QueueLength {
