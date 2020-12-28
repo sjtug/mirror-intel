@@ -272,9 +272,12 @@ pub async fn index(path: &RawStr) -> rocket::Response<'static> {
 
 #[cfg(test)]
 mod tests {
-    use crate::common::{Config, EndpointOverride, IntelMission, Metrics};
     use crate::queue::QueueLength;
     use crate::utils::not_found;
+    use crate::{
+        common::{Config, EndpointOverride, IntelMission, Metrics},
+        storage::get_anonymous_s3_client,
+    };
     use reqwest::ClientBuilder;
     use rocket::http::Status;
     use std::sync::Arc;
@@ -299,6 +302,7 @@ mod tests {
             tx,
             client,
             metrics: Arc::new(Metrics::new()),
+            s3_client: Arc::new(get_anonymous_s3_client()),
         };
 
         let queue_length_fairing = QueueLength {
