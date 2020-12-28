@@ -1,6 +1,7 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 
 mod artifacts;
+mod browse;
 mod common;
 mod error;
 mod intel_path;
@@ -11,6 +12,7 @@ mod storage;
 mod utils;
 
 use artifacts::download_artifacts;
+use browse::list;
 use common::{Config, IntelMission, Metrics};
 use error::{Error, Result};
 use queue::QueueLength;
@@ -75,6 +77,7 @@ async fn rocket() -> rocket::Rocket {
         tx,
         client,
         metrics: Arc::new(Metrics::new()),
+        s3_client: Arc::new(storage::get_anonymous_s3_client()),
     };
 
     let config_download = config.clone();
@@ -105,6 +108,7 @@ async fn rocket() -> rocket::Rocket {
         .mount(
             "/",
             routes![
+                list,
                 crates_io_get,
                 crates_io_head,
                 flathub_get,

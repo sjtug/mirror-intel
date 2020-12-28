@@ -264,7 +264,7 @@ pub async fn guix(
 }
 
 #[get("/<path>")]
-pub async fn index(path: &RawStr) -> String {
+pub async fn index(path: &RawStr) -> rocket::Response<'static> {
     utils::no_route_for(path)
 }
 

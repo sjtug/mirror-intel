@@ -1,6 +1,7 @@
 use prometheus::{IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
 use reqwest::Client;
 use rocket::response;
+use rusoto_s3::S3Client;
 use serde::Deserialize;
 use tokio::sync::mpsc::Sender;
 
@@ -109,6 +110,7 @@ pub struct IntelMission {
     pub tx: Sender<Task>,
     pub client: Client,
     pub metrics: Arc<Metrics>,
+    pub s3_client: Arc<S3Client>,
 }
 
 #[derive(Clone, Deserialize, Debug)]
