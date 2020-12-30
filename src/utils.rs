@@ -213,7 +213,7 @@ pub fn no_route_for(route: &str) -> Response<'static> {
             sites. Please follow our instructions to set up your software
             registry. If you intend to browse, we have provided an experimental
             API to browse bucket.</p>
-            <p><a href="/{}?mirror_intel_list">Browse {}</a></p>"#,
+            <p><a href="/{}/?mirror_intel_list">Browse {}</a></p>"#,
         route, route, route
     );
     resp.sized_body(body.len(), Cursor::new(body));
