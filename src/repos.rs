@@ -35,7 +35,7 @@ macro_rules! simple_intel {
                     return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
                 }
 
-                if !$filter(&task.path) {
+                if !$filter(&config, &task.path) {
                     return Ok(Redirect::moved(task.upstream()).into());
                 }
 
@@ -75,7 +75,7 @@ macro_rules! simple_intel {
                     return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
                 }
 
-                if !$filter(&task.path) {
+                if !$filter(&config, &task.path) {
                     return Ok(Redirect::moved(task.upstream()).into());
                 }
 
@@ -99,15 +99,15 @@ pub fn disallow_all(_path: &str) -> bool {
     false
 }
 
-pub fn allow_all(_path: &str) -> bool {
+pub fn allow_all(_config: &Config, _path: &str) -> bool {
     true
 }
 
-pub fn ostree_allow(path: &str) -> bool {
+pub fn ostree_allow(_config: &Config, path: &str) -> bool {
     !(path.starts_with("summary") || path.starts_with("config") || path.starts_with("refs/"))
 }
 
-pub fn rust_static_allow(path: &str) -> bool {
+pub fn rust_static_allow(_config: &Config, path: &str) -> bool {
     if path.contains("channel-") || path.ends_with(".toml") {
         return false;
     }
@@ -119,11 +119,29 @@ pub fn rust_static_allow(path: &str) -> bool {
     true
 }
 
-pub fn wheels_allow(path: &str) -> bool {
+pub fn wheels_allow(_config: &Config, path: &str) -> bool {
     path.ends_with(".whl") || path.ends_with(".html")
 }
 
-pub fn github_releases_allow(path: &str) -> bool {
+pub fn github_release_allow(config: &Config, path: &str) -> bool {
+    lazy_static! {
+        static ref REGEX: Regex =
+            Regex::new("^[^/]*/[^/]*/releases/download/[^/]*/[^/]*$").unwrap();
+    };
+
+    if !config
+        .github_release
+        .allow
+        .iter()
+        .any(|repo| path.starts_with(repo))
+    {
+        return false;
+    }
+
+    REGEX.is_match(path)
+}
+
+pub fn sjtug_internal_allow(_config: &Config, path: &str) -> bool {
     lazy_static! {
         static ref REGEX: Regex =
             Regex::new("^[^/]*/releases/download/[^/]*/[^/]*.(tar.gz|zip)$").unwrap();
@@ -132,7 +150,7 @@ pub fn github_releases_allow(path: &str) -> bool {
     REGEX.is_match(path)
 }
 
-pub fn flutter_allow(path: &str) -> bool {
+pub fn flutter_allow(_config: &Config, path: &str) -> bool {
     if path.starts_with("releases/") {
         return !path.ends_with(".json");
     }
@@ -163,7 +181,7 @@ pub fn flutter_allow(path: &str) -> bool {
     false
 }
 
-pub fn linuxbrew_allow(path: &str) -> bool {
+pub fn linuxbrew_allow(_config: &Config, path: &str) -> bool {
     path.contains(".x86_64_linux")
 }
 
@@ -180,8 +198,9 @@ simple_intel! { homebrew_bottles, "homebrew-bottles", allow_all, disallow_all }
 simple_intel! { linuxbrew_bottles, "linuxbrew-bottles", linuxbrew_allow, disallow_all }
 simple_intel! { rust_static, "rust-static", rust_static_allow, disallow_all }
 simple_intel! { pytorch_wheels, "pytorch-wheels", wheels_allow, wheels_proxy }
-simple_intel! { sjtug_internal, "sjtug-internal", github_releases_allow, disallow_all }
+simple_intel! { sjtug_internal, "sjtug-internal", sjtug_internal_allow, disallow_all }
 simple_intel! { flutter_infra, "flutter_infra", flutter_allow, disallow_all }
+simple_intel! { github_release, "github-release", github_release_allow, disallow_all }
 
 #[get("/dart-pub/<path..>?<query..>")]
 pub async fn dart_pub(
@@ -491,18 +510,22 @@ mod tests {
 
     #[test]
     fn test_flutter_allow() {
-        assert!(!flutter_allow("releases/releases_windows.json"));
-        assert!(!flutter_allow("releases/releases_linux.json"));
+        let config = Config::default();
+        assert!(!flutter_allow(&config, "releases/releases_windows.json"));
+        assert!(!flutter_allow(&config, "releases/releases_linux.json"));
         assert!(flutter_allow(
+            &config,
             "releases/stable/linux/flutter_linux_1.17.0-stable.tar.xz"
         ));
         assert!(flutter_allow(
+            &config,
             "flutter/069b3cf8f093d44ec4bae1319cbfdc4f8b4753b6/android-arm/artifacts.zip"
         ));
         assert!(flutter_allow(
+            &config,
             "flutter/fonts/03bdd42a57aff5c496859f38d29825843d7fe68e/fonts.zip"
         ));
-        assert!(!flutter_allow("flutter/coverage/lcov.info"));
+        assert!(!flutter_allow(&config, "flutter/coverage/lcov.info"));
     }
 
     #[test]
@@ -533,5 +556,23 @@ mod tests {
         };
         let response = client.head(object.root_path()).dispatch().await;
         assert_eq!(response.status(), Status::Ok);
+    }
+
+    #[rocket::async_test]
+    async fn test_github_release() {
+        let mut config = Config::default();
+        config.github_release.allow.push("sjtug/lug/".to_string());
+        assert!(github_release_allow(
+            &config,
+            "sjtug/lug/releases/download/v0.0.0/test.txt"
+        ));
+        assert!(!github_release_allow(
+            &config,
+            "sjtug/lug/2333/releases/download/v0.0.0/test.txt"
+        ));
+        assert!(!github_release_allow(
+            &config,
+            "sjtug/lug2/releases/download/v0.0.0/test.txt"
+        ));
     }
 }
