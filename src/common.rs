@@ -120,7 +120,7 @@ pub struct EndpointOverride {
     pub replace: String,
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Default, Clone, Deserialize, Debug)]
 pub struct Endpoints {
     pub rust_static: String,
     pub homebrew_bottles: String,
@@ -135,16 +135,22 @@ pub struct Endpoints {
     pub linuxbrew_bottles: String,
     pub sjtug_internal: String,
     pub flutter_infra: String,
+    pub github_release: String,
     pub overrides: Vec<EndpointOverride>,
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Default, Clone, Deserialize, Debug)]
 pub struct S3Config {
     pub endpoint: String,
     pub bucket: String,
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Default, Clone, Deserialize, Debug)]
+pub struct GithubReleaseConfig {
+    pub allow: Vec<String>,
+}
+
+#[derive(Default, Clone, Deserialize, Debug)]
 pub struct Config {
     pub max_pending_task: usize,
     pub concurrent_download: usize,
@@ -158,6 +164,7 @@ pub struct Config {
     pub direct_stream_size_kb: u64,
     pub read_only: bool,
     pub download_timeout: u64,
+    pub github_release: GithubReleaseConfig,
 }
 
 #[derive(Debug, Responder)]

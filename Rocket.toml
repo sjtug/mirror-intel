@@ -12,6 +12,9 @@ read_only = false
 download_timeout = 60
 # log_level = "off"
 
+[default.github_release]
+allow = ["sjtug/lug/", "FreeCAD/FreeCAD/"]
+
 [default.endpoints]
 rust_static = "https://mirrors.tuna.tsinghua.edu.cn/rustup"
 homebrew_bottles = "https://homebrew.bintray.com"
@@ -26,6 +29,7 @@ guix = "https://ci.guix.gnu.org"
 pytorch_wheels = "https://download.pytorch.org/whl"
 sjtug_internal = "https://github.com/sjtug"
 flutter_infra = "https://storage.flutter-io.cn/flutter_infra"
+github_release = "https://github.com"
 overrides = [
     { name = "flutter", pattern = "https://storage.flutter-io.cn/", replace = "https://storage.googleapis.com/" }
 ]

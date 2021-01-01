@@ -133,6 +133,8 @@ async fn rocket() -> rocket::Rocket {
                 sjtug_internal_head,
                 flutter_infra_get,
                 flutter_infra_head,
+                github_release_get,
+                github_release_head,
                 metrics,
                 index
             ],
