@@ -9,20 +9,20 @@ edition = "2018"
 [dependencies]
 rocket = { git ="https://github.com/SergioBenitez/Rocket" }
 rocket_codegen = { git = "https://github.com/SergioBenitez/Rocket"}
-rusoto_core = "0.45.0"
-rusoto_s3 = "0.45.0"
+rusoto_core = "0.46.0"
+rusoto_s3 = "0.46.0"
 thiserror = "1.0"
-reqwest = { version = "0.10", features = ["stream"] }
-tokio = { version = "0.2", features = ["full"] }
+reqwest = { version = "0.11", features = ["stream"] }
+tokio = { version = "1.0", features = ["full"] }
 lazy_static = "1.4"
 slog-term = "2.6"
 slog = "2.5"
 slog-async = "2.5"
 futures-util = "0.3"
 futures = "0.3"
-bytes = "0.6"
+bytes = "1.0"
 slog-envlogger = "2.2"
-tokio-util = { version = "0.3", features = ["compat"] }
+tokio-util = { version = "0.6", features = ["compat"] }
 serde = "1.0"
 prometheus = "0.11"
 regex = "1"

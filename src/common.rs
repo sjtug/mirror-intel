@@ -136,6 +136,7 @@ pub struct Endpoints {
     pub sjtug_internal: String,
     pub flutter_infra: String,
     pub github_release: String,
+    pub nix_channels_store: String,
     pub overrides: Vec<EndpointOverride>,
 }
 
