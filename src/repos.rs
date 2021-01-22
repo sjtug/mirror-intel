@@ -245,72 +245,53 @@ pub async fn dart_pub(
     }
 }
 
-#[get("/guix/<path..>?<query..>")]
-pub async fn guix(
-    path: IntelPath,
-    query: IntelQuery,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.guix.clone();
-    let path = path.into();
-    let task = Task {
-        storage: "guix",
-        ttl: config.ttl,
-        origin,
-        path,
+macro_rules! nix_intel {
+    ($name:ident, $route:expr) => {
+        paste! {
+            #[route(GET, path = "/" $route "/<path..>?<query..>")]
+            pub async fn [<$name>](
+                path: IntelPath,
+                query: IntelQuery,
+                intel_mission: State<'_, IntelMission>,
+                config: State<'_, Config>,
+            ) -> Result<IntelResponse<'static>> {
+                let origin = config.endpoints.$name.clone();
+                let path = path.into();
+                let task = Task {
+                    storage: $route,
+                    ttl: config.ttl,
+                    origin,
+                    path,
+                };
+
+                if !query.is_empty() {
+                    return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+                }
+
+                if task.path.starts_with("nar/") {
+                    Ok(task
+                        .resolve(&intel_mission, &config)
+                        .await?
+                        .reverse_proxy(&intel_mission)
+                        .await?
+                        .into())
+                } else if task.path.ends_with(".narinfo") {
+                    Ok(task
+                        .resolve(&intel_mission, &config)
+                        .await?
+                        .reverse_proxy(&intel_mission)
+                        .await?
+                        .into())
+                } else {
+                    Ok(Redirect::moved(task.upstream()).into())
+                }
+            }
+        }
     };
-
-    if !query.is_empty() {
-        return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
-    }
-
-    if task.path.starts_with("nar/") {
-        Ok(task
-            .resolve(&intel_mission, &config)
-            .await?
-            .reverse_proxy(&intel_mission)
-            .await?
-            .into())
-    } else if task.path.ends_with(".narinfo") {
-        Ok(task
-            .resolve(&intel_mission, &config)
-            .await?
-            .reverse_proxy(&intel_mission)
-            .await?
-            .into())
-    } else {
-        Ok(Redirect::moved(task.upstream()).into())
-    }
 }
 
-#[get("/nix-channels/store/<path..>?<query..>")]
-pub async fn nix_channels_store(
-    path: IntelPath,
-    query: IntelQuery,
-    intel_mission: State<'_, IntelMission>,
-    config: State<'_, Config>,
-) -> Result<IntelResponse<'static>> {
-    let origin = config.endpoints.nix_channels_store.clone();
-    let path = path.into();
-    let task = Task {
-        storage: "nix-channels/store",
-        ttl: config.ttl,
-        origin,
-        path,
-    };
-
-    if !query.is_empty() {
-        return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
-    }
-
-    Ok(task
-        .resolve(&intel_mission, &config)
-        .await?
-        .reverse_proxy(&intel_mission)
-        .await?
-        .into())
-}
+nix_intel! { guix, "guix" }
+nix_intel! { nix_channels_store, "nix-channels/store" }
 
 #[get("/<path>")]
 pub async fn index(path: &RawStr) -> rocket::Response<'static> {
