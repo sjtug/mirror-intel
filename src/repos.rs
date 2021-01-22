@@ -284,6 +284,34 @@ pub async fn guix(
     }
 }
 
+#[get("/nix-channels/store/<path..>?<query..>")]
+pub async fn nix_channels_store(
+    path: IntelPath,
+    query: IntelQuery,
+    intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.nix_channels_store.clone();
+    let path = path.into();
+    let task = Task {
+        storage: "nix-channels/store",
+        ttl: config.ttl,
+        origin,
+        path,
+    };
+
+    if !query.is_empty() {
+        return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+    }
+
+    Ok(task
+        .resolve(&intel_mission, &config)
+        .await?
+        .reverse_proxy(&intel_mission)
+        .await?
+        .into())
+}
+
 #[get("/<path>")]
 pub async fn index(path: &RawStr) -> rocket::Response<'static> {
     utils::no_route_for(path)

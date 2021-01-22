@@ -135,6 +135,7 @@ async fn rocket() -> rocket::Rocket {
                 flutter_infra_head,
                 github_release_get,
                 github_release_head,
+                nix_channels_store,
                 metrics,
                 index
             ],

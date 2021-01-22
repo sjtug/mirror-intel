@@ -9,7 +9,7 @@ base_url = "https://mirrors.sjtug.sjtu.edu.cn"
 ttl = 3
 direct_stream_size_kb = 4
 read_only = false
-download_timeout = 60
+download_timeout = 3600
 # log_level = "off"
 
 [default.github_release]
@@ -30,8 +30,10 @@ pytorch_wheels = "https://download.pytorch.org/whl"
 sjtug_internal = "https://github.com/sjtug"
 flutter_infra = "https://storage.flutter-io.cn/flutter_infra"
 github_release = "https://github.com"
+nix_channels_store = "https://mirrors.tuna.tsinghua.edu.cn/nix-channels/store"
 overrides = [
-    { name = "flutter", pattern = "https://storage.flutter-io.cn/", replace = "https://storage.googleapis.com/" }
+    { name = "flutter", pattern = "https://storage.flutter-io.cn/", replace = "https://storage.googleapis.com/" },
+    { name = "tuna", pattern = "https://mirrors.tuna.tsinghua.edu.cn/", replace = "https://nanomirrors.tuna.tsinghua.edu.cn/" }
 ]
 
 [default.s3]

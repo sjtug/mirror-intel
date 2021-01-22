@@ -14,7 +14,7 @@ use std::sync::Arc;
 use futures::{Stream, TryStreamExt};
 use std::sync::atomic::AtomicUsize;
 use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc::{unbounded_channel, Receiver};
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -216,8 +216,8 @@ pub async fn download_artifacts(
     loop {
         let mut task: Task;
         tokio::select! {
-            val = fail_rx.next() => { if let Some(val) = val { task = val; } else { break; } }
-            val = rx.next() => { if let Some(val) = val { task = val; } else { break; } }
+            val = fail_rx.recv() => { if let Some(val) = val { task = val; } else { break; } }
+            val = rx.recv() => { if let Some(val) = val { task = val; } else { break; } }
         }
 
         task.to_download_task(&config.endpoints.overrides);
