@@ -201,6 +201,7 @@ simple_intel! { pytorch_wheels, "pytorch-wheels", wheels_allow, wheels_proxy }
 simple_intel! { sjtug_internal, "sjtug-internal", sjtug_internal_allow, disallow_all }
 simple_intel! { flutter_infra, "flutter_infra", flutter_allow, disallow_all }
 simple_intel! { github_release, "github-release", github_release_allow, disallow_all }
+simple_intel! { opam_cache, "opam-cache", allow_all, disallow_all }
 
 #[get("/dart-pub/<path..>?<query..>")]
 pub async fn dart_pub(
@@ -243,6 +244,43 @@ pub async fn dart_pub(
     } else {
         Ok(Redirect::moved(task.upstream()).into())
     }
+}
+
+#[get("/pypi/web/simple/<path..>?<query..>")]
+pub async fn pypi(
+    path: IntelPath,
+    query: IntelQuery,
+    intel_mission: State<'_, IntelMission>,
+    config: State<'_, Config>,
+) -> Result<IntelResponse<'static>> {
+    let origin = config.endpoints.pypi_simple.clone();
+    let path = path.into();
+    let task = Task {
+        storage: "pypi",
+        ttl: config.ttl,
+        origin: origin.clone(),
+        path,
+    };
+
+    if !query.is_empty() {
+        return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+    }
+
+    Ok(task
+        .resolve_upstream()
+        .rewrite_upstream(
+            &intel_mission,
+            4096,
+            |content| {
+                content.replace(
+                    "../../packages",
+                    &format!("{}/pypi-packages", config.base_url),
+                )
+            },
+            &config,
+        )
+        .await?
+        .into())
 }
 
 macro_rules! nix_intel {

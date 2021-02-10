@@ -137,6 +137,8 @@ pub struct Endpoints {
     pub flutter_infra: String,
     pub github_release: String,
     pub nix_channels_store: String,
+    pub pypi_simple: String,
+    pub opam_cache: String,
     pub overrides: Vec<EndpointOverride>,
 }
 
