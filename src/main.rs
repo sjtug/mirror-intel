@@ -1,5 +1,3 @@
-#![feature(proc_macro_hygiene, decl_macro)]
-
 mod artifacts;
 mod browse;
 mod common;
@@ -136,6 +134,9 @@ async fn rocket() -> rocket::Rocket {
                 github_release_get,
                 github_release_head,
                 nix_channels_store,
+                pypi,
+                opam_cache_head,
+                opam_cache_get,
                 metrics,
                 index
             ],

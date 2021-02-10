@@ -35,6 +35,8 @@ overrides = [
     { name = "flutter", pattern = "https://storage.flutter-io.cn/", replace = "https://storage.googleapis.com/" },
     { name = "tuna", pattern = "https://mirrors.tuna.tsinghua.edu.cn/", replace = "https://nanomirrors.tuna.tsinghua.edu.cn/" }
 ]
+opam_cache = "https://opam.ocaml.org/cache"
+pypi_simple = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 
 [default.s3]
 endpoint = "https://s3.jcloud.sjtu.edu.cn"
