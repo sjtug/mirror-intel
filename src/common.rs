@@ -139,6 +139,7 @@ pub struct Endpoints {
     pub nix_channels_store: String,
     pub pypi_simple: String,
     pub opam_cache: String,
+    pub gradle_distribution: String,
     pub overrides: Vec<EndpointOverride>,
 }
 
