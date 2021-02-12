@@ -137,6 +137,8 @@ async fn rocket() -> rocket::Rocket {
                 pypi,
                 opam_cache_head,
                 opam_cache_get,
+                gradle_distribution_head,
+                gradle_distribution_get,
                 metrics,
                 index
             ],

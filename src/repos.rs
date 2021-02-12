@@ -189,6 +189,10 @@ pub fn wheels_proxy(path: &str) -> bool {
     path.ends_with(".html")
 }
 
+pub fn gradle_allow(_config: &Config, path: &str) -> bool {
+    path.ends_with(".zip")
+}
+
 simple_intel! { crates_io, "crates.io", allow_all, disallow_all }
 simple_intel! { flathub, "flathub", ostree_allow, disallow_all }
 simple_intel! { fedora_ostree, "fedora-ostree", ostree_allow, disallow_all }
@@ -202,6 +206,7 @@ simple_intel! { sjtug_internal, "sjtug-internal", sjtug_internal_allow, disallow
 simple_intel! { flutter_infra, "flutter_infra", flutter_allow, disallow_all }
 simple_intel! { github_release, "github-release", github_release_allow, disallow_all }
 simple_intel! { opam_cache, "opam-cache", allow_all, disallow_all }
+simple_intel! { gradle_distribution, "gradle/distribution", gradle_allow, disallow_all }
 
 #[get("/dart-pub/<path..>?<query..>")]
 pub async fn dart_pub(

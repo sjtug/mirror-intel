@@ -37,6 +37,7 @@ overrides = [
 ]
 opam_cache = "https://opam.ocaml.org/cache"
 pypi_simple = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+gradle_distribution = "https://services.gradle.org/distributions"
 
 [default.s3]
 endpoint = "https://s3.jcloud.sjtu.edu.cn"

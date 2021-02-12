@@ -4,7 +4,7 @@ The intelligent mirror redirector middleware for SJTUG.
 
 ## Usage
 
-First of all, put `Roclet.toml` in the same folder as `mirror-intel`. Then,
+First of all, put `Rocket.toml` in the same folder as `mirror-intel`. Then,
 
 ```
 RUST_LOG=info ./mirror-intel
@@ -17,15 +17,7 @@ and start testing.
 
 ## Supported Repos
 
-* rustup
-* homebrew-bottles
-* pypi-packages
-* fedora-iot
-* fedora-ostree
-* flathub
-* crates-io
-* dart-pub
-* guix
+See `Rocket.toml`.
 
 ## Configuration
 
