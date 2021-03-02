@@ -2,6 +2,8 @@
 
 The intelligent mirror redirector middleware for SJTUG.
 
+For more information about our mirror service, refer to https://github.com/sjtug/mirror-docker-unified/wiki
+
 ## Usage
 
 First of all, put `Rocket.toml` in the same folder as `mirror-intel`. Then,
