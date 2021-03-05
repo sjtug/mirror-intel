@@ -9,8 +9,8 @@ use crate::{
 use lazy_static::lazy_static;
 use paste::paste;
 use regex::Regex;
-use rocket::State;
 use rocket::response::Redirect;
+use rocket::State;
 
 macro_rules! simple_intel {
     ($name:ident, $route:expr, $filter:ident, $proxy:ident) => {
