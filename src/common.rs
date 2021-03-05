@@ -141,6 +141,7 @@ pub struct Endpoints {
     pub opam_cache: String,
     pub gradle_distribution: String,
     pub overrides: Vec<EndpointOverride>,
+    pub s3_only: Vec<String>,
 }
 
 #[derive(Default, Clone, Deserialize, Debug)]
