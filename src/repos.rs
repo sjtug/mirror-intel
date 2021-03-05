@@ -336,9 +336,22 @@ macro_rules! nix_intel {
 nix_intel! { guix, "guix" }
 nix_intel! { nix_channels_store, "nix-channels/store" }
 
-#[get("/<path>")]
-pub async fn index(path: &RawStr) -> rocket::Response<'static> {
-    utils::no_route_for(path)
+#[get("/<path..>")]
+pub async fn index(path: IntelPath, config: State<'_, Config>) -> IntelResponse<'static> {
+    let path: String = path.into();
+    if config
+        .endpoints
+        .s3_only
+        .iter()
+        .any(|x| path.starts_with(x) && &path != x)
+    {
+        return Redirect::moved(format!(
+            "{}/{}/{}",
+            config.s3.endpoint, config.s3.bucket, path
+        ))
+        .into();
+    }
+    utils::no_route_for(&path).into()
 }
 
 #[cfg(test)]

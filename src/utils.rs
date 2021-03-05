@@ -204,8 +204,14 @@ pub fn not_found(req: &rocket::Request) -> Response<'static> {
     no_route_for(&req.uri().to_string())
 }
 
-pub fn no_route_for(route: &str) -> Response<'static> {
+pub fn no_route_for(mut route: &str) -> Response<'static> {
     let mut resp = Response::build();
+    if route.ends_with("/") {
+        route = &route[..route.len() - 1];
+    }
+    if route.starts_with("/") {
+        route = &route[1..];
+    }
     let body = format!(
         r#"<p>No route for {}.</p>
             <p>mirror-intel uses S3-like storage backend,

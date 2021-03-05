@@ -1,32 +1,32 @@
 [package]
-name = "mirror-intel"
-version = "0.1.0"
 authors = ["Alex Chi <iskyzh@gmail.com>"]
 edition = "2018"
+name = "mirror-intel"
+version = "0.1.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocket = { git ="https://github.com/SergioBenitez/Rocket" }
-rocket_codegen = { git = "https://github.com/SergioBenitez/Rocket"}
-rusoto_core = "0.46.0"
-rusoto_s3 = "0.46.0"
-thiserror = "1.0"
-reqwest = { version = "0.11", features = ["stream"] }
-tokio = { version = "1.0", features = ["full"] }
-lazy_static = "1.4"
-slog-term = "2.6"
-slog = "2.5"
-slog-async = "2.5"
-futures-util = "0.3"
-futures = "0.3"
 bytes = "1.0"
-slog-envlogger = "2.2"
-tokio-util = { version = "0.6", features = ["compat"] }
-serde = "1.0"
+futures = "0.3"
+futures-util = "0.3"
+lazy_static = "1.4"
+paste = "1"
 prometheus = "0.11"
 regex = "1"
-paste = "1"
+reqwest = {version = "0.11", features = ["stream"]}
+rocket = {git = "https://github.com/SergioBenitez/Rocket", rev = "93e62c86eddf7cc9a7fc40b044182f83f0d7d92a"}
+rocket_codegen = {git = "https://github.com/SergioBenitez/Rocket", rev = "93e62c86eddf7cc9a7fc40b044182f83f0d7d92a"}
+rusoto_core = "0.46.0"
+rusoto_s3 = "0.46.0"
+serde = "1.0"
+slog = "2.5"
+slog-async = "2.5"
+slog-envlogger = "2.2"
+slog-term = "2.6"
+thiserror = "1.0"
+tokio = {version = "1.0", features = ["full"]}
+tokio-util = {version = "0.6", features = ["compat"]}
 
 [dev-dependencies]
 tempdir = "0.3"
