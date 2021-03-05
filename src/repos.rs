@@ -10,7 +10,7 @@ use lazy_static::lazy_static;
 use paste::paste;
 use regex::Regex;
 use rocket::State;
-use rocket::{http::RawStr, response::Redirect};
+use rocket::response::Redirect;
 
 macro_rules! simple_intel {
     ($name:ident, $route:expr, $filter:ident, $proxy:ident) => {
