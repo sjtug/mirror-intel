@@ -1,10 +1,10 @@
 use std::io::Cursor;
 
-use crate::common::{Config, IntelMission};
+use crate::common::{Config, IntelMission, IntelResponse};
 use crate::intel_path::IntelPath;
 use crate::{Error, Result};
 
-use rocket::{http::ContentType, Response, State};
+use rocket::{http::ContentType, response::Redirect, Response, State};
 use rusoto_s3::S3;
 use serde::Deserialize;
 
@@ -46,9 +46,28 @@ pub async fn list(
     path: IntelPath,
     config: State<'_, Config>,
     intel_mission: State<'_, IntelMission>,
-) -> Result<Response<'static>> {
+) -> Result<IntelResponse<'static>> {
     let mut path_slash: String = path.into();
     path_slash.push('/');
+    let real_endpoint = format!("{}/{}/{}", config.s3.endpoint, config.s3.bucket, path_slash);
+    let mirror_clone_list = "mirror_clone_list.html";
+
+    // First, check if there is mirror-clone index
+    let mut req = rusoto_s3::GetObjectRequest::default();
+    req.bucket = config.s3.bucket.clone();
+    req.key = format!("{}{}", path_slash, mirror_clone_list);
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        intel_mission.s3_client.get_object(req),
+    )
+    .await
+    .map_err(|_| Error::Timeout(()))?;
+
+    if let Ok(_) = result {
+        return Ok(Redirect::permanent(format!("{}{}", real_endpoint, mirror_clone_list)).into());
+    }
+
+    // Otherwise, generate a dynamic index
     let mut req = rusoto_s3::ListObjectsRequest::default();
     req.bucket = config.s3.bucket.clone();
     req.prefix = Some(path_slash.clone());
@@ -103,8 +122,6 @@ pub async fn list(
         body += &content;
     };
 
-    let real_endpoint = format!("{}/{}/{}", config.s3.endpoint, config.s3.bucket, path_slash);
-
     let body = format!(
         r#"
             <html>
@@ -148,5 +165,5 @@ pub async fn list(
 
     resp.sized_body(body.len(), Cursor::new(body));
     resp.header(ContentType::HTML);
-    Ok(resp.finalize())
+    Ok(resp.finalize().into())
 }
