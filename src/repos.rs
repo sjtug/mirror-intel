@@ -204,6 +204,7 @@ simple_intel! { rust_static, "rust-static", rust_static_allow, disallow_all }
 simple_intel! { pytorch_wheels, "pytorch-wheels", wheels_allow, wheels_proxy }
 simple_intel! { sjtug_internal, "sjtug-internal", sjtug_internal_allow, disallow_all }
 simple_intel! { flutter_infra, "flutter_infra", flutter_allow, disallow_all }
+simple_intel! { flutter_infra_release, "flutter_infra_release", flutter_allow, disallow_all }
 simple_intel! { github_release, "github-release", github_release_allow, disallow_all }
 simple_intel! { opam_cache, "opam-cache", allow_all, disallow_all }
 simple_intel! { gradle_distribution, "gradle/distributions", gradle_allow, disallow_all }

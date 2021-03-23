@@ -135,6 +135,7 @@ pub struct Endpoints {
     pub linuxbrew_bottles: String,
     pub sjtug_internal: String,
     pub flutter_infra: String,
+    pub flutter_infra_release: String,
     pub github_release: String,
     pub nix_channels_store: String,
     pub pypi_simple: String,
