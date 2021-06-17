@@ -54,7 +54,7 @@ async fn rocket() -> rocket::Rocket {
     let logger = create_logger();
     let rocket = rocket::ignite();
     let figment = rocket.figment();
-    let mut config: Config = figment.extract().expect("config");
+    let config: Config = figment.extract().expect("config");
 
     info!(logger, "checking if bucket is available...");
     // check if credentials are set and we have permissions
