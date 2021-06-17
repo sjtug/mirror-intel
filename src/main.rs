@@ -59,8 +59,8 @@ async fn rocket() -> rocket::Rocket {
     info!(logger, "checking if bucket is available...");
     // check if credentials are set and we have permissions
     if let Err(error) = check_s3(&config.s3.bucket).await {
-        warn!(logger, "s3 storage backend not available, running in read-only mode"; "error" => format!("{:?}", error));
-        config.read_only = true;
+        warn!(logger, "s3 storage backend not available, but not running in read-only mode"; "error" => format!("{:?}", error));
+        // config.read_only = true;
     }
 
     info!(logger, "{:?}", config);
