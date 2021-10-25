@@ -108,11 +108,13 @@ pub fn ostree_allow(_config: &Config, path: &str) -> bool {
 }
 
 pub fn rust_static_allow(_config: &Config, path: &str) -> bool {
-    if path.contains("channel-") || path.ends_with(".toml") {
+    // ignore all folder other than `rustup`.
+    if !path.starts_with("dist") && !path.starts_with("rustup") {
         return false;
     }
 
-    if !path.starts_with("dist") && !path.starts_with("rustup") {
+    // ignore `toml` under `rustup` folder
+    if path.starts_with("rustup") && path.ends_with(".toml") {
         return false;
     }
 
