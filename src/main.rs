@@ -30,6 +30,8 @@ use rocket::State;
 use slog::{o, Drain};
 use tokio::sync::mpsc::channel;
 
+/// Create a logger with styled output, env-filter, and async logging.
+/// TODO what about a global logger? There's no reason to pass it around.
 fn create_logger() -> slog::Logger {
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::FullFormat::new(decorator).build().fuse();
@@ -38,6 +40,7 @@ fn create_logger() -> slog::Logger {
     slog::Logger::root(drain, o!())
 }
 
+/// Metrics endpoint.
 #[get("/metrics")]
 pub async fn metrics(intel_mission: State<'_, IntelMission>) -> Result<Vec<u8>> {
     let mut buffer = vec![];
@@ -65,6 +68,8 @@ async fn rocket() -> rocket::Rocket {
 
     info!(logger, "{:?}", config);
 
+    // TODO so we are now having a global bounded queue, which will be easily blocked if there're
+    // too many requests to large files. See issue #24.
     let (tx, rx) = channel(config.max_pending_task);
     let client = ClientBuilder::new()
         .user_agent(&config.user_agent)

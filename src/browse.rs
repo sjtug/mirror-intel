@@ -1,3 +1,5 @@
+//! S3 index page.
+
 use std::io::Cursor;
 
 use crate::common::{Config, IntelMission, IntelResponse};
@@ -6,20 +8,15 @@ use crate::{Error, Result};
 
 use rocket::{http::ContentType, response::Redirect, Response, State};
 use rusoto_s3::S3;
-use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
-struct Item {
-    name: String,
-    source: String,
-}
-
+/// Generate a row for given s3 key.
 fn generate_url(key: &str, last_modified: &str, size: i64, prefix: &str) -> String {
     let show_key = if key.len() >= prefix.len() {
         &key[prefix.len()..]
     } else {
         key
     };
+    // TODO refactor this
     if key.ends_with("/") {
         return format!(
             r#"<tr>
@@ -28,19 +25,20 @@ fn generate_url(key: &str, last_modified: &str, size: i64, prefix: &str) -> Stri
             <td>{}</td>
         </tr>"#,
             key, show_key, last_modified, size
-        );
+        )
     } else {
-        return format!(
+        format!(
             r#"<tr>
             <td><a href="/{}">{}</a></td>
             <td>{}</td>
             <td>{}</td>
         </tr>"#,
             key, show_key, last_modified, size
-        );
+        )
     }
 }
 
+/// Directory index page for a given path.
 #[get("/<path..>?mirror_intel_list")]
 pub async fn list(
     path: IntelPath,

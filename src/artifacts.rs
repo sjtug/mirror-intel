@@ -1,18 +1,16 @@
-use crate::common::{Config, Metrics, Task};
-use crate::error::{Error, Result};
-use crate::storage::stream_to_s3;
-
-use futures_util::StreamExt;
-use reqwest::Client;
-use rocket::http::hyper::Bytes;
+//! Artifact download implementation.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use futures::{Stream, TryStreamExt};
-use std::sync::atomic::AtomicUsize;
+use futures_util::StreamExt;
+use reqwest::Client;
+use rocket::http::hyper::Bytes;
+use slog::{debug, info, o, warn};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc::{unbounded_channel, Receiver};
@@ -20,14 +18,17 @@ use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio_util::codec;
 
-use slog::{debug, info, o, warn};
+use crate::common::{Config, Metrics, Task};
+use crate::error::{Error, Result};
+use crate::storage::stream_to_s3;
 
-type IoResult = std::result::Result<Bytes, std::io::Error>;
+type IOResult = std::result::Result<Bytes, std::io::Error>;
 
+// So if we make `Logger` global, we can convert this into a `transpose` on an adhoc trait.
 fn transform_stream(
     stream: impl Stream<Item = reqwest::Result<Bytes>>,
     logger: slog::Logger,
-) -> impl Stream<Item = IoResult> {
+) -> impl Stream<Item = IOResult> {
     stream.map(move |x| {
         x.map_err(|err| {
             warn!(logger, "failed to receive data: {:?}", err);
@@ -36,11 +37,13 @@ fn transform_stream(
     })
 }
 
+/// Global unique file id counter.
 static FILE_ID: AtomicUsize = AtomicUsize::new(0);
 
+/// An async file wrapper that can be used as a file-backed stream buffer.
 struct FileWrapper {
     path: PathBuf,
-    pub f: Option<BufWriter<File>>,
+    f: Option<BufWriter<File>>,
 }
 
 impl AsMut<BufWriter<File>> for FileWrapper {
@@ -56,6 +59,9 @@ impl AsRef<BufWriter<File>> for FileWrapper {
 }
 
 impl FileWrapper {
+    /// Create a new file at the given path.
+    ///
+    /// Existing files are truncated.
     async fn open(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
             path: path.as_ref().to_path_buf(),
@@ -71,10 +77,11 @@ impl FileWrapper {
         })
     }
 
+    /// Convert this file into a stream of bytes.
     async fn into_bytes_stream(
         mut self,
         logger: slog::Logger,
-    ) -> Result<impl Stream<Item = IoResult>> {
+    ) -> Result<impl Stream<Item = IOResult>> {
         // remove file on disk, but we could still read it
         let mut f = self.f.take().unwrap();
         f.flush().await?;
@@ -102,10 +109,14 @@ impl Drop for FileWrapper {
     }
 }
 
+/// Convert a stream of bytes to a file-backed one.
+///
+/// The old stream is consumed and a new stream with the same contents is returned.
+/// It can be used to download large files from the network.
 async fn to_file_stream(
-    mut stream: impl Stream<Item = IoResult> + Unpin,
+    mut stream: impl Stream<Item = IOResult> + Unpin,
     logger: slog::Logger,
-) -> Result<impl Stream<Item = IoResult>> {
+) -> Result<impl Stream<Item = IOResult>> {
     let path = format!(
         "/mnt/cache/{}",
         FILE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -118,10 +129,14 @@ async fn to_file_stream(
     Ok(file.into_bytes_stream(logger).await?)
 }
 
+/// Convert a stream of bytes to a memory-backed one.
+///
+/// The old stream is consumed and a new stream with the same contents is returned.
+/// It can be used to download small files from the network.
 async fn to_memory_stream(
     content_length: usize,
-    mut stream: impl Stream<Item = IoResult> + Unpin,
-) -> Result<impl Stream<Item = IoResult>> {
+    mut stream: impl Stream<Item = IOResult> + Unpin,
+) -> Result<impl Stream<Item = IOResult>> {
     let mut result = Vec::with_capacity(content_length);
     while let Some(v) = stream.next().await {
         let v = v?;
@@ -130,6 +145,10 @@ async fn to_memory_stream(
     Ok(futures::stream::iter(vec![Ok(Bytes::from(result))]))
 }
 
+/// Cache a task.
+///
+/// This function does the actual caching part.
+/// It's called in `download_artifact`, which does something like concurrency control and retries.
 async fn process_task(
     task: Task,
     client: Client,
@@ -162,17 +181,19 @@ async fn process_task(
     Ok(())
 }
 
+/// Download a stream of bytes from the given url.
 async fn stream_from_url(
     client: Client,
     url: String,
     config: &Config,
     logger: slog::Logger,
-) -> Result<(u64, Pin<Box<dyn Stream<Item = IoResult> + Sync + Send>>)> {
+) -> Result<(u64, Pin<Box<dyn Stream<Item = IOResult> + Sync + Send>>)> {
     let response = client.get(&url).send().await?;
     let status = response.status();
     if !status.is_success() {
         return Err(Error::HTTPError(status));
     }
+    // TODO ehhh I believe this whole thing can be extracted into an adhoc trait, maybe called ".downloaded()"?
     if let Some(content_length) = response.content_length() {
         if content_length > config.ignore_threshold_mb * 1024 * 1024 {
             return Err(Error::TooLarge(()));
@@ -201,11 +222,14 @@ async fn stream_from_url(
     }
 }
 
+/// Main artifact download task.
+///
+/// This function handles concurrency control, queueing, and retries.
 pub async fn download_artifacts(
     mut rx: Receiver<Task>,
     client: Client,
     logger: slog::Logger,
-    config: &Config,
+    config: &Config,    // TODO what about pass in an Arc<Config>, or we generate an Arc<Config> at the first place?
     metrics: Arc<Metrics>,
 ) {
     let sem = Arc::new(Semaphore::new(config.concurrent_download));
@@ -213,28 +237,47 @@ pub async fn download_artifacts(
     let (fail_tx, mut fail_rx) = unbounded_channel();
     let config = Arc::new(config.clone());
 
+    // TODO convert to while let Some(_)
     loop {
+        // Breaks when either of the channels is closed?
+        // Should not have much difference with
+        // `while let Some(_) = select!(fail_rx.recv(), rx.recv())` if nothing goes wrong,
+        // but it's not clear what happens if a task panics.
+        // Need to ensure the program terminates when this happens for a quick recovery.
         let mut task: Task;
         tokio::select! {
             val = fail_rx.recv() => { if let Some(val) = val { task = val; } else { break; } }
             val = rx.recv() => { if let Some(val) = val { task = val; } else { break; } }
         }
 
+        // Apply override rules on the task.
         task.to_download_task(&config.endpoints.overrides);
 
         metrics.task_in_queue.dec();
 
+        // We need to ensure that the total count of pending tasks doesn't exceed the set limit.
+        // The income `rx` is already bounded by `max_pending_task`, so it's the retried tasks that
+        // are the problem.
+        // If a task is retried and current pending queue is full, this will randomly ignore a
+        // retried task or an incoming task.
+
+        // TODO I don't think the current double queue design is good. We need to prio income over
+        // retries, i.e. income overtakes retries.
         if metrics.task_in_queue.get() > config.max_pending_task as i64 {
             continue;
         }
 
+        // TODO Oh I see why making logger global is blocked. What about replace slog with tracing?
         let logger = logger.new(o!("storage" => task.storage.clone(), "origin" => task.origin.clone(), "path" => task.path.clone()));
 
         if task.ttl == 0 {
+            // The task has been retries too many times. Skip it.
             continue;
         }
 
         if config.read_only {
+            // We are now in read-only mode. Do nothing.
+            // TODO so what about not running the whole task when in read-only mode?
             info!(logger, "skipped");
             continue;
         }
@@ -242,6 +285,7 @@ pub async fn download_artifacts(
         let task_hash = task.upstream();
 
         {
+            // Deduplicate tasks.
             let mut processing_task = processing_task.lock().await;
             if processing_task.contains(&task_hash) {
                 info!(logger, "already processing, continue to next task");
@@ -253,7 +297,9 @@ pub async fn download_artifacts(
         info!(logger, "start download");
         metrics.download_counter.inc();
 
+        // Wait for concurrency permit.
         let permit = Arc::clone(&sem).acquire_owned().await;
+
         let client = client.clone();
         let processing_task = processing_task.clone();
         let metrics = metrics.clone();
@@ -261,6 +307,7 @@ pub async fn download_artifacts(
         let config = config.clone();
 
         metrics.task_download.inc();
+        // Spawn actual task download task.
         tokio::spawn(async move {
             let _permit = permit;
             let mut task_new = task.clone();
@@ -299,10 +346,10 @@ pub async fn download_artifacts(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use slog::Drain;
     use tempdir::TempDir;
 
-    use slog::Drain;
+    use super::*;
 
     fn create_test_logger() -> slog::Logger {
         let decorator = slog_term::TermDecorator::new().build();

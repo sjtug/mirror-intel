@@ -5,6 +5,7 @@ use rocket::{Request, Response};
 
 use crate::common::IntelMission;
 
+/// Middleware that sets `X-Intel-Queue-Length` header to current task queue length.
 pub struct QueueLength {
     pub mission: IntelMission,
 }

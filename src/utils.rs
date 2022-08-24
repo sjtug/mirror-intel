@@ -13,6 +13,9 @@ use rocket::{
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 impl Task {
+    /// Resolve a task.
+    ///
+    /// Returns cache if it is available, otherwise schedules a download and returns origin.
     async fn resolve_internal(
         self,
         mission: &IntelMission,
@@ -30,6 +33,7 @@ impl Task {
                 return Ok(IntelObject::Cached { task: self, resp });
             } else {
                 mission.metrics.task_in_queue.inc();
+                // TODO this may block if the queue is full, which is not good.
                 mission
                     .tx
                     .clone()
@@ -41,10 +45,26 @@ impl Task {
         Ok(IntelObject::Origin { task: self })
     }
 
+    /// Resolve a task.
+    ///
+    /// Returns cache if it is available, otherwise schedules a download and returns origin.
+    ///
+    /// # Content
+    ///
+    /// This method returns content of the cache if it is available.
+    /// If you don't need it, consider using `resolve_no_content` instead.
     pub async fn resolve(self, mission: &IntelMission, config: &Config) -> Result<IntelObject> {
         self.resolve_internal(mission, config, false).await
     }
 
+    /// Resolve a task.
+    ///
+    /// Returns cache if it is available, otherwise schedules a download and returns origin.
+    ///
+    /// # Content
+    ///
+    /// This method doesn't return content of the cache if it is available.
+    /// If you need it, consider using `resolve` instead.
     pub async fn resolve_no_content(
         self,
         mission: &IntelMission,
@@ -53,12 +73,14 @@ impl Task {
         self.resolve_internal(mission, config, true).await
     }
 
+    /// Always resolves to upstream. Neither returns cache nor schedules a download.
     pub fn resolve_upstream(self) -> IntelObject {
         IntelObject::Origin { task: self }
     }
 }
 
 impl IntelObject {
+    /// Extract original task from the object.
     pub fn task(&self) -> &Task {
         match self {
             IntelObject::Cached { task, .. } => task,
@@ -66,6 +88,7 @@ impl IntelObject {
         }
     }
 
+    /// Get URL target.
     pub fn target(&self, config: &crate::common::Config) -> String {
         match self {
             IntelObject::Cached { task, .. } => task.cached(config),
@@ -73,6 +96,7 @@ impl IntelObject {
         }
     }
 
+    /// Respond with redirection.
     pub fn redirect(self, config: &crate::common::Config) -> Redirect {
         match &self {
             IntelObject::Cached { .. } => Redirect::moved(self.target(config)),
@@ -80,10 +104,11 @@ impl IntelObject {
         }
     }
 
+    /// Respond with rewritten upstream response.
     pub async fn rewrite_upstream(
         self,
         intel_mission: &IntelMission,
-        below_size_kb: u64,
+        below_size_kb: u64, // only responses with size below this will be rewritten
         f: impl Fn(String) -> String,
         config: &Config,
     ) -> Result<IntelResponse<'static>> {
@@ -107,6 +132,8 @@ impl IntelObject {
         Ok(self.redirect(config).into())
     }
 
+    /// Pass status code from upstream to new response.
+    /// TODO extract to adhoc trait or method?
     fn set_status(intel_response: &mut ResponseBuilder, response: &reqwest::Response) {
         let status = response.status();
         // special case for NGINX 499
@@ -119,6 +146,7 @@ impl IntelObject {
         }
     }
 
+    /// Respond with reverse proxy.
     pub async fn reverse_proxy(
         self,
         intel_mission: &IntelMission,
@@ -166,12 +194,14 @@ impl IntelObject {
         }
     }
 
+    /// Respond with reverse proxy if it's a small cached file, or redirect otherwise.
     pub async fn stream_small_cached(
         self,
         size_kb: u64,
         intel_mission: &IntelMission,
         config: &Config,
     ) -> Result<IntelResponse<'static>> {
+        // TODO if let
         match &self {
             IntelObject::Cached { resp, .. } => {
                 if let Some(content_length) = resp.content_length() {
@@ -187,23 +217,15 @@ impl IntelObject {
     }
 }
 
-impl<'a> IntelResponse<'a> {
-    pub fn content_type(mut self, content_type: ContentType) -> Self {
-        match &mut self {
-            IntelResponse::Redirect(_) => {}
-            IntelResponse::Response(resp) => {
-                resp.set_header(content_type);
-            }
-        }
-        self
-    }
-}
-
+/// 404 page.
 #[catch(404)]
 pub fn not_found(req: &rocket::Request) -> Response<'static> {
     no_route_for(&req.uri().to_string())
 }
 
+/// No route page.
+///
+/// Hint user to redirect to the S3 index page.
 pub fn no_route_for(mut route: &str) -> Response<'static> {
     let mut resp = Response::build();
     if route.ends_with("/") {

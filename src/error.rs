@@ -1,3 +1,4 @@
+//! Mirror-intel errors.
 use std::io::Cursor;
 use std::result;
 
