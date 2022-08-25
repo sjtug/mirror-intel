@@ -132,7 +132,9 @@ pub struct IntelMission {
     /// Sender to caching future.
     ///
     /// You may issue a new caching task by sending it to the caching future.
-    pub tx: Sender<Task>,
+    ///
+    /// This field can be `None` if mirror-intel is in read-only mode.
+    pub tx: Option<Sender<Task>>,
     /// Reqwest client.
     pub client: Client,
     /// Prometheus metrics.

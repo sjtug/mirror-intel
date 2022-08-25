@@ -386,7 +386,7 @@ mod tests {
             .unwrap();
 
         let mission = IntelMission {
-            tx,
+            tx: Some(tx),
             client,
             metrics: Arc::new(Metrics::new()),
             s3_client: Arc::new(get_anonymous_s3_client()),

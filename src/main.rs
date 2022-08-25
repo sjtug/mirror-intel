@@ -68,9 +68,32 @@ async fn rocket() -> rocket::Rocket {
 
     info!(logger, "{:?}", config);
 
-    // TODO so we are now having a global bounded queue, which will be easily blocked if there're
-    // too many requests to large files. See issue #24.
-    let (tx, rx) = channel(config.max_pending_task);
+    info!(logger, "starting server...");
+
+    let metrics = Arc::new(Metrics::new());
+    let metrics_download = metrics.clone();
+    let tx = (!config.read_only).then(|| {
+        // TODO so we are now having a global bounded queue, which will be easily blocked if there're
+        // too many requests to large files. See issue #24.
+        let (tx, rx) = channel(config.max_pending_task);
+
+        let config_download = config.clone();
+
+        // Spawn caching future.
+        tokio::spawn(async move {
+            download_artifacts(
+                rx,
+                Client::new(),
+                logger,
+                &config_download,
+                metrics_download,
+            )
+                .await
+        });
+
+        tx
+    });
+
     let client = ClientBuilder::new()
         .user_agent(&config.user_agent)
         .build()
@@ -79,25 +102,9 @@ async fn rocket() -> rocket::Rocket {
     let mission = IntelMission {
         tx,
         client,
-        metrics: Arc::new(Metrics::new()),
+        metrics,
         s3_client: Arc::new(storage::get_anonymous_s3_client()),
     };
-
-    let config_download = config.clone();
-    let metrics_download = mission.metrics.clone();
-
-    info!(logger, "starting server...");
-
-    tokio::spawn(async move {
-        download_artifacts(
-            rx,
-            Client::new(),
-            logger,
-            &config_download,
-            metrics_download,
-        )
-        .await
-    });
 
     let queue_length_fairing = QueueLength {
         mission: mission.clone(),

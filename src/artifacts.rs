@@ -275,13 +275,6 @@ pub async fn download_artifacts(
             continue;
         }
 
-        if config.read_only {
-            // We are now in read-only mode. Do nothing.
-            // TODO so what about not running the whole task when in read-only mode?
-            info!(logger, "skipped");
-            continue;
-        }
-
         let task_hash = task.upstream();
 
         {

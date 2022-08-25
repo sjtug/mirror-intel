@@ -32,14 +32,15 @@ impl Task {
             if resp.status().is_success() {
                 return Ok(IntelObject::Cached { task: self, resp });
             } else {
-                mission.metrics.task_in_queue.inc();
-                // TODO this may block if the queue is full, which is not good.
-                mission
-                    .tx
-                    .clone()
-                    .send(self.clone())
-                    .await
-                    .map_err(|_| Error::SendError(()))?;
+                if let Some(tx) = &mission.tx {
+                    mission.metrics.task_in_queue.inc();
+                    // TODO this may block if the queue is full, which is not good.
+                    tx
+                        .clone()
+                        .send(self.clone())
+                        .await
+                        .map_err(|_| Error::SendError(()))?;
+                }
             }
         }
         Ok(IntelObject::Origin { task: self })
