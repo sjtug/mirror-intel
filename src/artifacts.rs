@@ -5,18 +5,23 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use bytes::BytesMut;
 use futures::{Stream, TryStreamExt};
 use futures_util::StreamExt;
-use reqwest::Client;
+use pin_project::pin_project;
+use reqwest::{Client, Response};
 use rocket::http::hyper::Bytes;
-use slog::{debug, info, o, warn};
+use slog::{debug, info, Logger, o, warn};
+use tap::Pipe;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc::{unbounded_channel, Receiver};
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio_util::codec;
+use url::Url;
 
 use crate::common::{Config, Metrics, Task};
 use crate::error::{Error, Result};
@@ -24,11 +29,11 @@ use crate::storage::stream_to_s3;
 
 type IOResult = std::result::Result<Bytes, std::io::Error>;
 
-// So if we make `Logger` global, we can convert this into a `transpose` on an adhoc trait.
-fn transform_stream(
-    stream: impl Stream<Item = reqwest::Result<Bytes>>,
-    logger: slog::Logger,
-) -> impl Stream<Item = IOResult> {
+/// Convert reqwest resp stream to io result stream.
+fn into_io_stream(
+    stream: impl Stream<Item=reqwest::Result<Bytes>>,
+    logger: Logger,
+) -> impl Stream<Item=IOResult> {
     stream.map(move |x| {
         x.map_err(|err| {
             warn!(logger, "failed to receive data: {:?}", err);
@@ -78,10 +83,7 @@ impl FileWrapper {
     }
 
     /// Convert this file into a stream of bytes.
-    async fn into_bytes_stream(
-        mut self,
-        logger: slog::Logger,
-    ) -> Result<impl Stream<Item = IOResult>> {
+    async fn into_bytes_stream(mut self, logger: Logger) -> Result<impl Stream<Item=IOResult>> {
         // remove file on disk, but we could still read it
         let mut f = self.f.take().unwrap();
         f.flush().await?;
@@ -95,7 +97,7 @@ impl FileWrapper {
         f.seek(std::io::SeekFrom::Start(0)).await?;
         Ok(
             codec::FramedRead::new(BufReader::new(f), codec::BytesCodec::new())
-                .map_ok(|bytes| bytes.freeze()),
+                .map_ok(BytesMut::freeze),
         )
     }
 }
@@ -113,10 +115,10 @@ impl Drop for FileWrapper {
 ///
 /// The old stream is consumed and a new stream with the same contents is returned.
 /// It can be used to download large files from the network.
-async fn to_file_stream(
-    mut stream: impl Stream<Item = IOResult> + Unpin,
-    logger: slog::Logger,
-) -> Result<impl Stream<Item = IOResult>> {
+async fn into_file_stream(
+    mut stream: impl Stream<Item=IOResult> + Unpin,
+    logger: Logger,
+) -> Result<impl Stream<Item=IOResult>> {
     let path = format!(
         "/mnt/cache/{}",
         FILE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -133,10 +135,10 @@ async fn to_file_stream(
 ///
 /// The old stream is consumed and a new stream with the same contents is returned.
 /// It can be used to download small files from the network.
-async fn to_memory_stream(
+async fn into_memory_stream(
     content_length: usize,
-    mut stream: impl Stream<Item = IOResult> + Unpin,
-) -> Result<impl Stream<Item = IOResult>> {
+    mut stream: impl Stream<Item=IOResult> + Unpin,
+) -> Result<impl Stream<Item=IOResult>> {
     let mut result = Vec::with_capacity(content_length);
     while let Some(v) = stream.next().await {
         let v = v?;
@@ -156,7 +158,7 @@ async fn process_task(
     logger: slog::Logger,
 ) -> Result<()> {
     if client
-        .head(&task.cached(config))
+        .head(task.cached_url(config))
         .send()
         .await?
         .status()
@@ -166,7 +168,7 @@ async fn process_task(
         return Ok(());
     }
     let (content_length, stream) =
-        stream_from_url(client, task.upstream(), config, logger.clone()).await?;
+        stream_from_url(client, task.upstream_url(), config, logger.clone()).await?;
     info!(logger, "get length={}", content_length);
     let key = task.s3_key()?;
     let result = stream_to_s3(
@@ -175,51 +177,84 @@ async fn process_task(
         rusoto_s3::StreamingBody::new(stream),
         &config.s3.bucket,
     )
-    .await?;
+        .await?;
     info!(logger, "upload to bucket");
     debug!(logger, "{:?}", result);
     Ok(())
 }
 
+#[pin_project(project = EitherProj)]
+enum Either<T, U> {
+    Left(#[pin] T),
+    Right(#[pin] U),
+}
+
+impl<O, T, U> Stream for Either<T, U>
+    where
+        T: Stream<Item=O>,
+        U: Stream<Item=O>,
+{
+    type Item = O;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.project() {
+            EitherProj::Left(left) => left.poll_next(cx),
+            EitherProj::Right(right) => right.poll_next(cx),
+        }
+    }
+}
+
+/// Convert this response into a byte stream.
+///
+/// Backing buffer type is chosen based on the content length.
+async fn into_stream(
+    resp: Response,
+    config: &Config,
+    logger: Logger,
+) -> Result<(u64, impl Stream<Item=IOResult> + Send + Sync)> {
+    if let Some(content_length) = resp.content_length() {
+        if content_length > config.ignore_threshold_mb * 1024 * 1024 {
+            Err(Error::TooLarge(()))
+        } else {
+            let io_stream = resp.bytes_stream().pipe(|s| into_io_stream(s, logger.clone()));
+            if content_length > config.file_threshold_mb * 1024 * 1024 {
+                info!(logger, "stream mode: file backend");
+                let stream = io_stream.pipe(|s| into_file_stream(s, logger)).await?;
+                Ok((content_length, Either::Left(Either::Left(stream))))
+            } else if content_length > 1024 * 1024 {
+                info!(logger, "stream mode: memory cache");
+                let stream = io_stream.pipe(|s|
+                    into_memory_stream(content_length as usize, s))
+                    .await?;
+                Ok((content_length, Either::Left(Either::Right(stream))))
+            } else {
+                info!(logger, "stream mode: direct copy");
+                Ok((content_length, Either::Right(Either::Left(io_stream))))
+            }
+        }
+    } else {
+        info!(logger, "stream mode: direct copy");
+        let resp = resp.bytes().await?;
+        Ok((
+            resp.len() as u64,
+            Either::Right(Either::Right(futures::stream::iter(vec![resp]).map(Ok))),
+        ))
+    }
+}
+
 /// Download a stream of bytes from the given url.
 async fn stream_from_url(
     client: Client,
-    url: String,
+    url: Url,
     config: &Config,
-    logger: slog::Logger,
-) -> Result<(u64, Pin<Box<dyn Stream<Item = IOResult> + Sync + Send>>)> {
-    let response = client.get(&url).send().await?;
+    logger: Logger,
+) -> Result<(u64, impl Stream<Item=IOResult> + Send + Sync)> {
+    let response = client.get(url).send().await?;
     let status = response.status();
     if !status.is_success() {
         return Err(Error::HTTPError(status));
     }
-    // TODO ehhh I believe this whole thing can be extracted into an adhoc trait, maybe called ".downloaded()"?
-    if let Some(content_length) = response.content_length() {
-        if content_length > config.ignore_threshold_mb * 1024 * 1024 {
-            return Err(Error::TooLarge(()));
-        } else if content_length > config.file_threshold_mb * 1024 * 1024 {
-            info!(logger, "stream mode: file backend");
-            let stream = transform_stream(response.bytes_stream(), logger.clone());
-            let stream = to_file_stream(stream, logger).await?;
-            Ok((content_length, Box::pin(stream)))
-        } else if content_length > 1024 * 1024 {
-            info!(logger, "stream mode: memory cache");
-            let stream = transform_stream(response.bytes_stream(), logger);
-            let stream = to_memory_stream(content_length as usize, stream).await?;
-            Ok((content_length, Box::pin(stream)))
-        } else {
-            info!(logger, "stream mode: direct copy");
-            let stream = transform_stream(response.bytes_stream(), logger);
-            Ok((content_length, Box::pin(stream)))
-        }
-    } else {
-        info!(logger, "stream mode: direct copy");
-        let resp = response.bytes().await?;
-        Ok((
-            resp.len() as u64,
-            Box::pin(futures::stream::iter(vec![resp]).map(|x| Ok(x))),
-        ))
-    }
+    into_stream(response, config, logger).await
 }
 
 /// Main artifact download task.
@@ -228,30 +263,22 @@ async fn stream_from_url(
 pub async fn download_artifacts(
     mut rx: Receiver<Task>,
     client: Client,
-    logger: slog::Logger,
-    config: &Config,    // TODO what about pass in an Arc<Config>, or we generate an Arc<Config> at the first place?
+    logger: Logger,
+    config: Arc<Config>,
     metrics: Arc<Metrics>,
 ) {
     let sem = Arc::new(Semaphore::new(config.concurrent_download));
-    let processing_task = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let processing_task = Arc::new(Mutex::new(HashSet::new()));
     let (fail_tx, mut fail_rx) = unbounded_channel();
-    let config = Arc::new(config.clone());
 
-    // TODO convert to while let Some(_)
-    loop {
-        // Breaks when either of the channels is closed?
-        // Should not have much difference with
-        // `while let Some(_) = select!(fail_rx.recv(), rx.recv())` if nothing goes wrong,
-        // but it's not clear what happens if a task panics.
-        // Need to ensure the program terminates when this happens for a quick recovery.
-        let mut task: Task;
-        tokio::select! {
-            val = fail_rx.recv() => { if let Some(val) = val { task = val; } else { break; } }
-            val = rx.recv() => { if let Some(val) = val { task = val; } else { break; } }
-        }
+    while let Some(task) = tokio::select! {
+        val = fail_rx.recv() => val,
+        val = rx.recv() => val
+    } {
+        let mut task: Task = task; // Work around intelliRust bug.
 
         // Apply override rules on the task.
-        task.to_download_task(&config.endpoints.overrides);
+        task.apply_override(&config.endpoints.overrides);
 
         metrics.task_in_queue.dec();
 
@@ -268,14 +295,14 @@ pub async fn download_artifacts(
         }
 
         // TODO Oh I see why making logger global is blocked. What about replace slog with tracing?
-        let logger = logger.new(o!("storage" => task.storage.clone(), "origin" => task.origin.clone(), "path" => task.path.clone()));
+        let logger = logger.new(o!("storage" => task.storage, "origin" => task.origin.clone(), "path" => task.path.clone()));
 
-        if task.ttl == 0 {
-            // The task has been retries too many times. Skip it.
+        if task.retry_limit == 0 {
+            // The task has been retried too many times. Skip it.
             continue;
         }
 
-        let task_hash = task.upstream();
+        let task_hash = task.upstream_url();
 
         {
             // Deduplicate tasks.
@@ -291,7 +318,7 @@ pub async fn download_artifacts(
         metrics.download_counter.inc();
 
         // Wait for concurrency permit.
-        let permit = Arc::clone(&sem).acquire_owned().await;
+        let permit = Arc::clone(&sem).acquire_owned().await.unwrap();
 
         let client = client.clone();
         let processing_task = processing_task.clone();
@@ -311,9 +338,9 @@ pub async fn download_artifacts(
                 std::time::Duration::from_secs(config.download_timeout),
                 task_fut,
             );
-            if let Err(err) = task_fut.await.unwrap_or_else(|_| Err(Error::Timeout(()))) {
-                warn!(logger, "{:?}, ttl={}", err, task_new.ttl);
-                task_new.ttl -= 1;
+            if let Err(err) = task_fut.await.unwrap_or(Err(Error::Timeout(()))) {
+                warn!(logger, "{:?}, ttl={}", err, task_new.retry_limit);
+                task_new.retry_limit -= 1;
                 metrics.failed_download_counter.inc();
 
                 {
@@ -344,11 +371,11 @@ mod tests {
 
     use super::*;
 
-    fn create_test_logger() -> slog::Logger {
+    fn create_test_logger() -> Logger {
         let decorator = slog_term::TermDecorator::new().build();
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
         let drain = slog_async::Async::new(drain).build().fuse();
-        slog::Logger::root(drain, o!())
+        Logger::root(drain, o!())
     }
 
     #[tokio::test]

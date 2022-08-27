@@ -1,15 +1,16 @@
 //! Common types.
 
-use prometheus::{IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
+use std::sync::Arc;
+
+use prometheus::{proto, IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
 use reqwest::Client;
 use rocket::response;
 use rusoto_s3::S3Client;
 use serde::Deserialize;
 use tokio::sync::mpsc::Sender;
+use url::Url;
 
 use crate::{Error, Result};
-
-use std::sync::Arc;
 
 /// A cache task.
 #[derive(Debug, Clone)]
@@ -21,22 +22,22 @@ pub struct Task {
     /// File path.
     pub path: String,
     /// Max allowed retries.
-    /// TODO TTL is a bad name and we should change it.
-    pub ttl: usize,
+    pub retry_limit: usize,
 }
 
 impl Task {
     /// Upstream url.
-    pub fn upstream(&self) -> String {
-        format!("{}/{}", self.origin, self.path)
+    pub fn upstream_url(&self) -> Url {
+        Url::parse(&format!("{}/{}", self.origin, self.path)).expect("invalid upstream url")
     }
 
-    /// S3 cache.
-    pub fn cached(&self, config: &Config) -> String {
-        format!(
+    /// S3 cache url.
+    pub fn cached_url(&self, config: &Config) -> Url {
+        Url::parse(&format!(
             "{}/{}/{}/{}",
             config.s3.endpoint, config.s3.bucket, self.storage, self.path
-        )
+        ))
+        .expect("invalid cached url")
     }
 
     /// S3 root path.
@@ -55,8 +56,7 @@ impl Task {
     }
 
     /// Apply upstream URL override rules on the task.
-    /// TODO this is a bad name and we should change it.
-    pub fn to_download_task(&mut self, overrides: &[EndpointOverride]) {
+    pub fn apply_override(&mut self, overrides: &[EndpointOverride]) {
         for endpoint_override in overrides {
             if self.origin.contains(&endpoint_override.pattern) {
                 self.origin = self
@@ -79,12 +79,10 @@ pub struct Metrics {
     pub task_in_queue: Gauge,
     /// Tasks in progress.
     pub task_download: Gauge,
-    // TODO extract this to a separate `gather` method?
-    pub registry: Registry,
 }
 
-impl Metrics {
-    pub fn new() -> Self {
+impl Default for Metrics {
+    fn default() -> Self {
         let resolve_counter =
             Counter::with_opts(Opts::new("resolve_counter", "resolved objects")).unwrap();
         let download_counter = Counter::with_opts(Opts::new(
@@ -101,28 +99,36 @@ impl Metrics {
         let task_download =
             Gauge::with_opts(Opts::new("task_download", "tasks processing")).unwrap();
 
-        let registry = Registry::new();
-        registry
-            .register(Box::new(resolve_counter.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(download_counter.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(failed_download_counter.clone()))
-            .unwrap();
-
-        registry.register(Box::new(task_in_queue.clone())).unwrap();
-        registry.register(Box::new(task_download.clone())).unwrap();
-
         Self {
-            registry,
             resolve_counter,
             download_counter,
+            failed_download_counter,
             task_in_queue,
             task_download,
-            failed_download_counter,
         }
+    }
+}
+
+impl Metrics {
+    pub fn gather(&self) -> Vec<proto::MetricFamily> {
+        let registry = Registry::new();
+        registry
+            .register(Box::new(self.resolve_counter.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(self.download_counter.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(self.failed_download_counter.clone()))
+            .unwrap();
+
+        registry
+            .register(Box::new(self.task_in_queue.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(self.task_download.clone()))
+            .unwrap();
+        registry.gather()
     }
 }
 
@@ -231,7 +237,9 @@ pub struct Config {
     /// Base URL of this server.
     pub base_url: String,
     /// Max retry times for a failed download.
-    pub ttl: usize,
+    /// It's named as `ttl` for backward compatibility.
+    #[serde(rename = "ttl")]
+    pub max_retries: usize,
     /// Maximum size of a cached file to be served directly instead of redirect
     ///
     /// Only works in `dart_pub` currently.

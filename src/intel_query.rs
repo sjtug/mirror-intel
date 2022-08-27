@@ -1,14 +1,18 @@
+use std::fmt::{Display, Formatter};
+
 use rocket::request::{FromQuery, Query};
 
 use crate::error::Error;
 
 pub struct IntelQuery(String);
 
-impl IntelQuery {
-    pub fn to_string(self) -> String {
-        self.0
+impl Display for IntelQuery {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
+}
 
+impl IntelQuery {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

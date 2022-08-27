@@ -1,3 +1,9 @@
+use lazy_static::lazy_static;
+use paste::paste;
+use regex::Regex;
+use rocket::response::Redirect;
+use rocket::State;
+
 use crate::error::Result;
 use crate::intel_path::IntelPath;
 use crate::intel_query::IntelQuery;
@@ -5,12 +11,6 @@ use crate::{
     common::{Config, IntelMission, IntelResponse, Task},
     utils,
 };
-
-use lazy_static::lazy_static;
-use paste::paste;
-use regex::Regex;
-use rocket::response::Redirect;
-use rocket::State;
 
 macro_rules! simple_intel {
     ($name:ident, $route:expr, $filter:ident, $proxy:ident) => {
@@ -26,17 +26,17 @@ macro_rules! simple_intel {
                 let path = path.into();
                 let task = Task {
                     storage: $route,
-                    ttl: config.ttl,
+                    retry_limit: config.max_retries,
                     origin,
                     path,
                 };
 
                 if !query.is_empty() {
-                    return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+                    return Ok(Redirect::found(format!("{}?{}", task.upstream_url(), query.to_string())).into());
                 }
 
                 if !$filter(&config, &task.path) {
-                    return Ok(Redirect::moved(task.upstream()).into());
+                    return Ok(Redirect::moved(task.upstream_url().to_string()).into());
                 }
 
                 if $proxy(&task.path) {
@@ -66,17 +66,17 @@ macro_rules! simple_intel {
                 let path = path.into();
                 let task = Task {
                     storage: $route,
-                    ttl: config.ttl,
+                    retry_limit: config.max_retries,
                     origin,
                     path,
                 };
 
                 if !query.is_empty() {
-                    return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+                    return Ok(Redirect::found(format!("{}?{}", task.upstream_url(), query.to_string())).into());
                 }
 
                 if !$filter(&config, &task.path) {
-                    return Ok(Redirect::moved(task.upstream()).into());
+                    return Ok(Redirect::moved(task.upstream_url().to_string()).into());
                 }
 
                 if $proxy(&task.path) {
@@ -95,11 +95,11 @@ macro_rules! simple_intel {
     };
 }
 
-pub fn disallow_all(_path: &str) -> bool {
+pub const fn disallow_all(_path: &str) -> bool {
     false
 }
 
-pub fn allow_all(_config: &Config, _path: &str) -> bool {
+pub const fn allow_all(_config: &Config, _path: &str) -> bool {
     true
 }
 
@@ -222,13 +222,13 @@ pub async fn dart_pub(
     let path = path.into();
     let task = Task {
         storage: "dart-pub",
-        ttl: config.ttl,
+        retry_limit: config.max_retries,
         origin: origin.clone(),
         path,
     };
 
     if !query.is_empty() {
-        return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+        return Ok(Redirect::found(format!("{}?{}", task.upstream_url(), query)).into());
     }
 
     if task.path.starts_with("api/") {
@@ -240,17 +240,15 @@ pub async fn dart_pub(
                 |content| content.replace(&origin, &format!("{}/dart-pub", config.base_url)),
                 &config,
             )
-            .await?
-            .into())
+            .await?)
     } else if task.path.starts_with("packages/") {
         Ok(task
             .resolve(&intel_mission, &config)
             .await?
             .stream_small_cached(config.direct_stream_size_kb, &intel_mission, &config)
-            .await?
-            .into())
+            .await?)
     } else {
-        Ok(Redirect::moved(task.upstream()).into())
+        Ok(Redirect::moved(task.upstream_url().to_string()).into())
     }
 }
 
@@ -265,17 +263,16 @@ pub async fn pypi(
     let path = path.into();
     let task = Task {
         storage: "pypi",
-        ttl: config.ttl,
+        retry_limit: config.max_retries,
         origin: origin.clone(),
         path,
     };
 
     if !query.is_empty() {
-        return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+        return Ok(Redirect::found(format!("{}?{}", task.upstream_url(), query)).into());
     }
 
-    Ok(task
-        .resolve_upstream()
+    task.resolve_upstream()
         .rewrite_upstream(
             &intel_mission,
             4096,
@@ -287,8 +284,7 @@ pub async fn pypi(
             },
             &config,
         )
-        .await?
-        .into())
+        .await
 }
 
 macro_rules! nix_intel {
@@ -305,13 +301,13 @@ macro_rules! nix_intel {
                 let path = path.into();
                 let task = Task {
                     storage: $route,
-                    ttl: config.ttl,
+                    retry_limit: config.max_retries,
                     origin,
                     path,
                 };
 
                 if !query.is_empty() {
-                    return Ok(Redirect::found(format!("{}?{}", task.upstream(), query.to_string())).into());
+                    return Ok(Redirect::found(format!("{}?{}", task.upstream_url(), query.to_string())).into());
                 }
 
                 if task.path.starts_with("nar/") {
@@ -329,7 +325,7 @@ macro_rules! nix_intel {
                         .await?
                         .into())
                 } else {
-                    Ok(Redirect::moved(task.upstream()).into())
+                    Ok(Redirect::moved(task.upstream_url().to_string()).into())
                 }
             }
         }
@@ -359,16 +355,18 @@ pub async fn index(path: IntelPath, config: State<'_, Config>) -> IntelResponse<
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use reqwest::ClientBuilder;
+    use rocket::http::Status;
+    use tokio::sync::mpsc::{channel, Receiver};
+
     use crate::queue::QueueLength;
     use crate::utils::not_found;
     use crate::{
         common::{Config, EndpointOverride, IntelMission, Metrics},
         storage::get_anonymous_s3_client,
     };
-    use reqwest::ClientBuilder;
-    use rocket::http::Status;
-    use std::sync::Arc;
-    use tokio::sync::mpsc::{channel, Receiver};
 
     use super::*;
 
@@ -388,7 +386,7 @@ mod tests {
         let mission = IntelMission {
             tx: Some(tx),
             client,
-            metrics: Arc::new(Metrics::new()),
+            metrics: Arc::new(Metrics::default()),
             s3_client: Arc::new(get_anonymous_s3_client()),
         };
 
@@ -425,7 +423,7 @@ mod tests {
             storage: "sjtug-internal",
             origin: "https://github.com/sjtug".to_string(),
             path: "mirror-clone/releases/download/v0.1.7/mirror-clone.tar.gz".to_string(),
-            ttl: 3,
+            retry_limit: 3,
         }
     }
 
@@ -434,7 +432,7 @@ mod tests {
             storage: "sjtug-internal",
             origin: "https://github.com/sjtug".to_string(),
             path: "mirror-clone/releases/download/v0.1.7/mirror-clone-2333.tar.gz".to_string(),
-            ttl: 3,
+            retry_limit: 3,
         }
     }
 
@@ -443,7 +441,7 @@ mod tests {
             storage: "sjtug-internal",
             origin: "https://github.com/sjtug".to_string(),
             path: "mirror-clone/releases/download/v0.1.7/forbidden/mirror-clone.tar.gz".to_string(),
-            ttl: 3,
+            retry_limit: 3,
         }
     }
 
@@ -456,7 +454,7 @@ mod tests {
         assert_eq!(response.status(), Status::MovedPermanently);
         assert_eq!(
             response.headers().get("Location").collect::<Vec<&str>>(),
-            vec![&object.cached(&config)]
+            vec![object.cached_url(&config).as_str()]
         );
     }
 
@@ -468,7 +466,7 @@ mod tests {
         assert_eq!(response.status(), Status::MovedPermanently);
         assert_eq!(
             response.headers().get("Location").collect::<Vec<&str>>(),
-            vec![&object.cached(&config)]
+            vec![object.cached_url(&config).as_str()]
         );
     }
 
@@ -481,7 +479,7 @@ mod tests {
         assert_eq!(response.status(), Status::Found);
         assert_eq!(
             response.headers().get("Location").collect::<Vec<&str>>(),
-            vec![&object.upstream()]
+            vec![object.upstream_url().as_str()]
         );
     }
 
@@ -494,7 +492,7 @@ mod tests {
         assert_eq!(response.status(), Status::Found);
         assert_eq!(
             response.headers().get("Location").collect::<Vec<&str>>(),
-            vec![&object.upstream()]
+            vec![object.upstream_url().as_str()]
         );
     }
 
@@ -507,7 +505,7 @@ mod tests {
         assert_eq!(response.status(), Status::MovedPermanently);
         assert_eq!(
             response.headers().get("Location").collect::<Vec<&str>>(),
-            vec![&object.upstream()]
+            vec![object.upstream_url().as_str()]
         );
     }
 
@@ -520,7 +518,7 @@ mod tests {
         assert_eq!(response.status(), Status::MovedPermanently);
         assert_eq!(
             response.headers().get("Location").collect::<Vec<&str>>(),
-            vec![&object.upstream()]
+            vec![object.upstream_url().as_str()]
         );
     }
 
@@ -532,13 +530,13 @@ mod tests {
             storage: "sjtug-internal",
             origin: "https://github.com/sjtug".to_string(),
             path: "mirror-clone/releases/download/v0.1.7/mirror%2B%2B%2B-clone.tar.gz".to_string(),
-            ttl: 3,
+            retry_limit: 3,
         };
         let response = client.head(object.root_path()).dispatch().await;
         assert_eq!(response.status(), Status::Found);
         assert_eq!(
             response.headers().get("Location").collect::<Vec<&str>>(),
-            vec![&object.upstream()]
+            vec![object.upstream_url().as_str()]
         );
     }
 
@@ -550,7 +548,7 @@ mod tests {
             storage: "sjtug-internal",
             origin: "https://github.com/sjtug".to_string(),
             path: "mirror-clone/releases/download/v0.1.7/.mirror%2B%2B%2B-clone.tar.gz".to_string(),
-            ttl: 3,
+            retry_limit: 3,
         };
         let response = client.head(object.root_path()).dispatch().await;
         assert_eq!(response.status(), Status::NotFound);
@@ -566,13 +564,13 @@ mod tests {
             path:
                 "mirror-clone/releases/download/v0.1.7/mirror-clone.tar.gz?ci=233333&ci2=23333333"
                     .to_string(),
-            ttl: 3,
+            retry_limit: 3,
         };
         let response = client.get(object.root_path()).dispatch().await;
         assert_eq!(response.status(), Status::Found);
         assert_eq!(
             response.headers().get("Location").collect::<Vec<&str>>(),
-            vec![&object.upstream()]
+            vec![object.upstream_url().as_str()]
         );
     }
 
@@ -583,15 +581,15 @@ mod tests {
         assert!(!flutter_allow(&config, "releases/releases_linux.json"));
         assert!(flutter_allow(
             &config,
-            "releases/stable/linux/flutter_linux_1.17.0-stable.tar.xz"
+            "releases/stable/linux/flutter_linux_1.17.0-stable.tar.xz",
         ));
         assert!(flutter_allow(
             &config,
-            "flutter/069b3cf8f093d44ec4bae1319cbfdc4f8b4753b6/android-arm/artifacts.zip"
+            "flutter/069b3cf8f093d44ec4bae1319cbfdc4f8b4753b6/android-arm/artifacts.zip",
         ));
         assert!(flutter_allow(
             &config,
-            "flutter/fonts/03bdd42a57aff5c496859f38d29825843d7fe68e/fonts.zip"
+            "flutter/fonts/03bdd42a57aff5c496859f38d29825843d7fe68e/fonts.zip",
         ));
         assert!(!flutter_allow(&config, "flutter/coverage/lcov.info"));
     }
@@ -600,11 +598,11 @@ mod tests {
     fn test_task_override() {
         let mut task = Task {
             storage: "flutter_infra",
-            ttl: 233,
+            retry_limit: 233,
             origin: "https://storage.flutter-io.cn/".to_string(),
             path: "test".to_string(),
         };
-        task.to_download_task(&[EndpointOverride {
+        task.apply_override(&[EndpointOverride {
             name: "flutter".to_string(),
             pattern: "https://storage.flutter-io.cn/".to_string(),
             replace: "https://storage.googleapis.com/".to_string(),
@@ -620,7 +618,7 @@ mod tests {
             storage: "pytorch-wheels",
             origin: "https://download.pytorch.org/whl".to_string(),
             path: "torch_stable.html".to_string(),
-            ttl: 3,
+            retry_limit: 3,
         };
         let response = client.head(object.root_path()).dispatch().await;
         assert_eq!(response.status(), Status::Ok);
@@ -632,15 +630,15 @@ mod tests {
         config.github_release.allow.push("sjtug/lug/".to_string());
         assert!(github_release_allow(
             &config,
-            "sjtug/lug/releases/download/v0.0.0/test.txt"
+            "sjtug/lug/releases/download/v0.0.0/test.txt",
         ));
         assert!(!github_release_allow(
             &config,
-            "sjtug/lug/2333/releases/download/v0.0.0/test.txt"
+            "sjtug/lug/2333/releases/download/v0.0.0/test.txt",
         ));
         assert!(!github_release_allow(
             &config,
-            "sjtug/lug2/releases/download/v0.0.0/test.txt"
+            "sjtug/lug2/releases/download/v0.0.0/test.txt",
         ));
     }
 }

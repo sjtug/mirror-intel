@@ -1,3 +1,24 @@
+#[macro_use]
+extern crate rocket;
+
+use std::sync::Arc;
+
+use prometheus::{Encoder, TextEncoder};
+use reqwest::{Client, ClientBuilder};
+use rocket::State;
+use slog::{info, warn};
+use slog::{o, Drain};
+use tokio::sync::mpsc::channel;
+
+use artifacts::download_artifacts;
+use browse::list;
+use common::{Config, IntelMission, Metrics};
+use error::{Error, Result};
+use queue::QueueLength;
+use repos::*;
+use storage::check_s3;
+use utils::not_found;
+
 mod artifacts;
 mod browse;
 mod common;
@@ -8,27 +29,6 @@ mod queue;
 mod repos;
 mod storage;
 mod utils;
-
-use artifacts::download_artifacts;
-use browse::list;
-use common::{Config, IntelMission, Metrics};
-use error::{Error, Result};
-use queue::QueueLength;
-use repos::*;
-use slog::{info, warn};
-use storage::check_s3;
-use utils::not_found;
-
-#[macro_use]
-extern crate rocket;
-
-use std::sync::Arc;
-
-use prometheus::{Encoder, TextEncoder};
-use reqwest::{Client, ClientBuilder};
-use rocket::State;
-use slog::{o, Drain};
-use tokio::sync::mpsc::channel;
 
 /// Create a logger with styled output, env-filter, and async logging.
 /// TODO what about a global logger? There's no reason to pass it around.
@@ -45,7 +45,7 @@ fn create_logger() -> slog::Logger {
 pub async fn metrics(intel_mission: State<'_, IntelMission>) -> Result<Vec<u8>> {
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
-    let metric_families = intel_mission.metrics.registry.gather();
+    let metric_families = intel_mission.metrics.gather();
     encoder
         .encode(&metric_families, &mut buffer)
         .map_err(|err| Error::CustomError(format!("failed to encode metrics: {:?}", err)))?;
@@ -70,25 +70,18 @@ async fn rocket() -> rocket::Rocket {
 
     info!(logger, "starting server...");
 
-    let metrics = Arc::new(Metrics::new());
+    let metrics = Arc::new(Metrics::default());
     let metrics_download = metrics.clone();
     let tx = (!config.read_only).then(|| {
         // TODO so we are now having a global bounded queue, which will be easily blocked if there're
         // too many requests to large files. See issue #24.
         let (tx, rx) = channel(config.max_pending_task);
 
-        let config_download = config.clone();
+        let config_download = Arc::new(config.clone());
 
         // Spawn caching future.
         tokio::spawn(async move {
-            download_artifacts(
-                rx,
-                Client::new(),
-                logger,
-                &config_download,
-                metrics_download,
-            )
-                .await
+            download_artifacts(rx, Client::new(), logger, config_download, metrics_download).await;
         });
 
         tx

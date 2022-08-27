@@ -1,13 +1,14 @@
 //! S3 index page.
 
+use std::borrow::Cow;
 use std::io::Cursor;
+
+use rocket::{http::ContentType, response::Redirect, Response, State};
+use rusoto_s3::S3;
 
 use crate::common::{Config, IntelMission, IntelResponse};
 use crate::intel_path::IntelPath;
 use crate::{Error, Result};
-
-use rocket::{http::ContentType, response::Redirect, Response, State};
-use rusoto_s3::S3;
 
 /// Generate a row for given s3 key.
 fn generate_url(key: &str, last_modified: &str, size: i64, prefix: &str) -> String {
@@ -16,26 +17,20 @@ fn generate_url(key: &str, last_modified: &str, size: i64, prefix: &str) -> Stri
     } else {
         key
     };
-    // TODO refactor this
-    if key.ends_with("/") {
-        return format!(
-            r#"<tr>
-            <td><a href="/{}?mirror_intel_list">{}</a></td>
-            <td>{}</td>
-            <td>{}</td>
-        </tr>"#,
-            key, show_key, last_modified, size
-        )
+
+    let href = if key.ends_with('/') {
+        Cow::Owned(format!("{}?mirror_intel_list", key))
     } else {
-        format!(
-            r#"<tr>
+        Cow::Borrowed(key)
+    };
+    format!(
+        r#"<tr>
             <td><a href="/{}">{}</a></td>
             <td>{}</td>
             <td>{}</td>
         </tr>"#,
-            key, show_key, last_modified, size
-        )
-    }
+        href, show_key, last_modified, size
+    )
 }
 
 /// Directory index page for a given path.
@@ -51,9 +46,11 @@ pub async fn list(
     let mirror_clone_list = "mirror_clone_list.html";
 
     // First, check if there is mirror-clone index
-    let mut req = rusoto_s3::GetObjectRequest::default();
-    req.bucket = config.s3.bucket.clone();
-    req.key = format!("{}{}", path_slash, mirror_clone_list);
+    let req = rusoto_s3::GetObjectRequest {
+        bucket: config.s3.bucket.clone(),
+        key: format!("{}{}", path_slash, mirror_clone_list),
+        ..Default::default()
+    };
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(1),
         intel_mission.s3_client.get_object(req),
@@ -61,16 +58,18 @@ pub async fn list(
     .await
     .map_err(|_| Error::Timeout(()))?;
 
-    if let Ok(_) = result {
+    if result.is_ok() {
         return Ok(Redirect::permanent(format!("{}{}", real_endpoint, mirror_clone_list)).into());
     }
 
     // Otherwise, generate a dynamic index
-    let mut req = rusoto_s3::ListObjectsRequest::default();
-    req.bucket = config.s3.bucket.clone();
-    req.prefix = Some(path_slash.clone());
-    req.delimiter = Some("/".to_string());
-    req.max_keys = Some(100);
+    let req = rusoto_s3::ListObjectsRequest {
+        bucket: config.s3.bucket.clone(),
+        prefix: Some(path_slash.clone()),
+        delimiter: Some("/".to_string()),
+        max_keys: Some(100),
+        ..Default::default()
+    };
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         intel_mission.s3_client.list_objects(req),
@@ -80,12 +79,11 @@ pub async fn list(
 
     let mut resp = Response::build();
 
-    let mut body = format!(
-        r#"<tr>
+    let mut body = r#"<tr>
             <td><a href="..?mirror_intel_list">..</a></td>
             <td></td>
         </tr>"#
-    );
+        .to_string();
 
     if let Some(common_prefixes) = result.common_prefixes {
         let content = common_prefixes
@@ -107,9 +105,9 @@ pub async fn list(
                         None
                     } else {
                         x.last_modified.as_ref().and_then(|last_modified| {
-                            x.size.as_ref().and_then(|size| {
-                                Some(generate_url(&key, &last_modified, *size, &path_slash))
-                            })
+                            x.size
+                                .as_ref()
+                                .map(|size| generate_url(key, last_modified, *size, &path_slash))
                         })
                     }
                 })

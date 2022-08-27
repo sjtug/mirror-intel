@@ -1,11 +1,12 @@
 //! S3 storage backend.
-use crate::error::{Error, Result};
+use std::time::Duration;
 
 use rusoto_core::credential::{AwsCredentials, StaticProvider};
 use rusoto_core::Region;
 use rusoto_s3::{S3Client, S3};
-use std::time::Duration;
 use tokio::time::timeout;
+
+use crate::error::{Error, Result};
 
 /// SJTU JCloud S3 region.
 fn jcloud_region() -> Region {
@@ -44,23 +45,27 @@ pub async fn stream_to_s3(
 ) -> Result<rusoto_s3::PutObjectOutput> {
     let s3_client = get_s3_client();
 
-    let mut req = rusoto_s3::PutObjectRequest::default();
-    req.body = Some(stream);
-    req.bucket = s3_bucket.to_string();
-    req.key = path.to_string();
-    req.content_length = Some(content_length as i64);
+    let req = rusoto_s3::PutObjectRequest {
+        body: Some(stream),
+        bucket: s3_bucket.to_string(),
+        key: path.to_string(),
+        content_length: Some(content_length as i64),
+        ..Default::default()
+    };
     Ok(s3_client.put_object(req).await?)
 }
 
 /// Check whether authenticated S3 storage is available.
 pub async fn check_s3(bucket: &str) -> Result<()> {
-    Ok(timeout(Duration::from_secs(1), async move {
+    timeout(Duration::from_secs(1), async move {
         let s3_client = get_s3_client();
-        let mut req = rusoto_s3::ListObjectsRequest::default();
-        req.bucket = bucket.to_string();
+        let req = rusoto_s3::ListObjectsRequest {
+            bucket: bucket.to_string(),
+            ..Default::default()
+        };
         s3_client.list_objects(req).await?;
         Ok::<(), Error>(())
     })
     .await
-    .map_err(|err| Error::CustomError(format!("failed to check s3 storage {:?}", err)))??)
+    .map_err(|err| Error::CustomError(format!("failed to check s3 storage {:?}", err)))?
 }

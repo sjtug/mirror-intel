@@ -1,6 +1,7 @@
+use std::path::PathBuf;
+
 use rocket::http::uri::{SegmentError, Segments, Uri};
 use rocket::request::FromSegments;
-use std::path::PathBuf;
 
 /// `IntelPath` represents a URL-encoded path which is safe to use both
 /// on s3 and on a normal filesystem.
@@ -10,7 +11,7 @@ pub struct IntelPath(String);
 impl<'a> FromSegments<'a> for IntelPath {
     type Error = SegmentError;
 
-    fn from_segments(segments: Segments<'a>) -> Result<IntelPath, SegmentError> {
+    fn from_segments(segments: Segments<'a>) -> Result<Self, SegmentError> {
         let mut buf = PathBuf::new();
 
         for segment in segments {
@@ -33,7 +34,7 @@ impl<'a> FromSegments<'a> for IntelPath {
             } else if cfg!(windows) && decoded.contains('\\') {
                 return Err(SegmentError::BadChar('\\'));
             } else {
-                buf.push(segment)
+                buf.push(segment);
             }
         }
 
@@ -47,8 +48,8 @@ impl AsRef<str> for IntelPath {
     }
 }
 
-impl Into<String> for IntelPath {
-    fn into(self) -> String {
-        self.0
+impl From<IntelPath> for String {
+    fn from(path: IntelPath) -> Self {
+        path.0
     }
 }

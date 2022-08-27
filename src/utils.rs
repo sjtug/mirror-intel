@@ -1,6 +1,3 @@
-use crate::common::{Config, IntelMission, IntelObject, IntelResponse, Task};
-use crate::error::{Error, Result};
-
 use std::io::Cursor;
 
 use futures::stream::TryStreamExt;
@@ -11,6 +8,10 @@ use rocket::{
     Response,
 };
 use tokio_util::compat::FuturesAsyncReadCompatExt;
+use url::Url;
+
+use crate::common::{Config, IntelMission, IntelObject, IntelResponse, Task};
+use crate::error::{Error, Result};
 
 impl Task {
     /// Resolve a task.
@@ -24,26 +25,24 @@ impl Task {
     ) -> Result<IntelObject> {
         mission.metrics.resolve_counter.inc();
         let req = if head {
-            mission.client.head(&self.cached(config))
+            mission.client.head(self.cached_url(config))
         } else {
-            mission.client.get(&self.cached(config))
+            mission.client.get(self.cached_url(config))
         };
-        if let Ok(resp) = req.send().await {
-            if resp.status().is_success() {
-                return Ok(IntelObject::Cached { task: self, resp });
-            } else {
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => Ok(IntelObject::Cached { task: self, resp }),
+            _ => {
                 if let Some(tx) = &mission.tx {
                     mission.metrics.task_in_queue.inc();
-                    // TODO this may block if the queue is full, which is not good.
-                    tx
-                        .clone()
+                    // TODO this may block if the queue is full, which is not good
+                    tx.clone()
                         .send(self.clone())
                         .await
                         .map_err(|_| Error::SendError(()))?;
                 }
+                Ok(IntelObject::Origin { task: self })
             }
         }
-        Ok(IntelObject::Origin { task: self })
     }
 
     /// Resolve a task.
@@ -75,33 +74,32 @@ impl Task {
     }
 
     /// Always resolves to upstream. Neither returns cache nor schedules a download.
-    pub fn resolve_upstream(self) -> IntelObject {
+    pub const fn resolve_upstream(self) -> IntelObject {
         IntelObject::Origin { task: self }
     }
 }
 
 impl IntelObject {
     /// Extract original task from the object.
-    pub fn task(&self) -> &Task {
+    pub const fn task(&self) -> &Task {
         match self {
-            IntelObject::Cached { task, .. } => task,
-            IntelObject::Origin { task, .. } => task,
+            Self::Cached { task, .. } | Self::Origin { task, .. } => task,
         }
     }
 
     /// Get URL target.
-    pub fn target(&self, config: &crate::common::Config) -> String {
+    pub fn target_url(&self, config: &Config) -> Url {
         match self {
-            IntelObject::Cached { task, .. } => task.cached(config),
-            IntelObject::Origin { task } => task.upstream(),
+            Self::Cached { task, .. } => task.cached_url(config),
+            Self::Origin { task } => task.upstream_url(),
         }
     }
 
     /// Respond with redirection.
-    pub fn redirect(self, config: &crate::common::Config) -> Redirect {
+    pub fn redirect(self, config: &Config) -> Redirect {
         match &self {
-            IntelObject::Cached { .. } => Redirect::moved(self.target(config)),
-            IntelObject::Origin { .. } => Redirect::found(self.target(config)),
+            Self::Cached { .. } => Redirect::moved(self.target_url(config).to_string()),
+            Self::Origin { .. } => Redirect::found(self.target_url(config).to_string()),
         }
     }
 
@@ -114,8 +112,8 @@ impl IntelObject {
         config: &Config,
     ) -> Result<IntelResponse<'static>> {
         let task = self.task();
-        let upstream = task.upstream();
-        let resp = intel_mission.client.get(&upstream).send().await?;
+        let upstream = task.upstream_url();
+        let resp = intel_mission.client.get(upstream).send().await?;
 
         if resp.status().is_success() {
             if let Some(content_length) = resp.content_length() {
@@ -134,7 +132,6 @@ impl IntelObject {
     }
 
     /// Pass status code from upstream to new response.
-    /// TODO extract to adhoc trait or method?
     fn set_status(intel_response: &mut ResponseBuilder, response: &reqwest::Response) {
         let status = response.status();
         // special case for NGINX 499
@@ -153,7 +150,7 @@ impl IntelObject {
         intel_mission: &IntelMission,
     ) -> Result<IntelResponse<'static>> {
         match self {
-            IntelObject::Cached { resp, .. } => {
+            Self::Cached { resp, .. } => {
                 let mut intel_response = Response::build();
                 if let Some(content_length) = resp.content_length() {
                     intel_response.raw_header("content-length", content_length.to_string());
@@ -172,8 +169,8 @@ impl IntelObject {
                 );
                 Ok(intel_response.finalize().into())
             }
-            IntelObject::Origin { ref task } => {
-                let resp = intel_mission.client.get(&task.upstream()).send().await?;
+            Self::Origin { ref task } => {
+                let resp = intel_mission.client.get(task.upstream_url()).send().await?;
                 let mut intel_response = Response::build();
                 if let Some(content_length) = resp.content_length() {
                     intel_response.raw_header("content-length", content_length.to_string());
@@ -202,18 +199,17 @@ impl IntelObject {
         intel_mission: &IntelMission,
         config: &Config,
     ) -> Result<IntelResponse<'static>> {
-        // TODO if let
         match &self {
-            IntelObject::Cached { resp, .. } => {
+            Self::Cached { resp, .. } => {
                 if let Some(content_length) = resp.content_length() {
                     if content_length <= size_kb * 1024 {
                         debug!("{} <= {}, direct stream", content_length, size_kb * 1024);
-                        return Ok(self.reverse_proxy(intel_mission).await?.into());
+                        return self.reverse_proxy(intel_mission).await;
                     }
                 }
                 Ok(self.redirect(config).into())
             }
-            IntelObject::Origin { .. } => Ok(self.redirect(config).into()),
+            Self::Origin { .. } => Ok(self.redirect(config).into()),
         }
     }
 }
@@ -229,10 +225,10 @@ pub fn not_found(req: &rocket::Request) -> Response<'static> {
 /// Hint user to redirect to the S3 index page.
 pub fn no_route_for(mut route: &str) -> Response<'static> {
     let mut resp = Response::build();
-    if route.ends_with("/") {
+    if route.ends_with('/') {
         route = &route[..route.len() - 1];
     }
-    if route.starts_with("/") {
+    if route.starts_with('/') {
         route = &route[1..];
     }
     let body = format!(
