@@ -8,6 +8,7 @@ use rocket::{
     Response,
 };
 use tokio_util::compat::FuturesAsyncReadCompatExt;
+use tracing::debug;
 use url::Url;
 
 use crate::common::{Config, IntelMission, IntelObject, IntelResponse, Task};

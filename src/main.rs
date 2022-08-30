@@ -6,9 +6,12 @@ use std::sync::Arc;
 use prometheus::{Encoder, TextEncoder};
 use reqwest::{Client, ClientBuilder};
 use rocket::State;
-use slog::{info, warn};
-use slog::{o, Drain};
 use tokio::sync::mpsc::channel;
+use tracing::{info, warn};
+use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
+use tracing_log::LogTracer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{fmt, EnvFilter, Registry};
 
 use artifacts::download_artifacts;
 use browse::list;
@@ -31,13 +34,45 @@ mod storage;
 mod utils;
 
 /// Create a logger with styled output, env-filter, and async logging.
-/// TODO what about a global logger? There's no reason to pass it around.
-fn create_logger() -> slog::Logger {
-    let decorator = slog_term::TermDecorator::new().build();
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let drain = slog_envlogger::new(drain);
-    let drain = slog_async::Async::new(drain).chan_size(1024).build().fuse();
-    slog::Logger::root(drain, o!())
+fn setup_log() -> impl Drop {
+    let registry = Registry::default().with(EnvFilter::from_default_env());
+    let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+
+    let rust_log_format = std::env::var("RUST_LOG_FORMAT")
+        .unwrap_or_default()
+        .to_lowercase();
+
+    let (json, after) =
+        match (rust_log_format.as_str(), cfg!(debug_assertions)) {
+            ("plain", _) => (false, None),
+            ("json", _) => (true, None),
+            ("", dev) => (!dev, None), // release defaults to json and debug to plain
+            (format, dev) => (
+                !dev,
+                Some(move || {
+                    warn!(
+                "RUST_LOG_FORMAT is set to '{}', but mirror-intel is in {} mode. Using '{}'",
+                format, if dev {"debug"} else {"release"}, if dev { "plain" } else { "json" }
+            );
+                }),
+            ),
+        };
+
+    if json {
+        tracing::subscriber::set_global_default(registry.with(JsonStorageLayer).with(
+            BunyanFormattingLayer::new("mirror-intel".to_string(), writer),
+        ))
+        .expect("Unable to set logger");
+    } else {
+        tracing::subscriber::set_global_default(
+            registry.with(fmt::Layer::default().pretty().with_writer(writer)),
+        )
+        .expect("Unable to set logger");
+    };
+    if let Some(after) = after {
+        after();
+    }
+    guard
 }
 
 /// Metrics endpoint.
@@ -54,21 +89,28 @@ pub async fn metrics(intel_mission: State<'_, IntelMission>) -> Result<Vec<u8>> 
 
 #[launch]
 async fn rocket() -> rocket::Rocket {
-    let logger = create_logger();
+    LogTracer::init().unwrap();
+    let _guard = setup_log();
+
     let rocket = rocket::ignite();
     let figment = rocket.figment();
     let config: Config = figment.extract().expect("config");
 
-    info!(logger, "checking if bucket is available...");
+    info!("checking if bucket is available...");
     // check if credentials are set and we have permissions
-    if let Err(error) = check_s3(&config.s3.bucket).await {
-        warn!(logger, "s3 storage backend not available, but not running in read-only mode"; "error" => format!("{:?}", error));
-        // config.read_only = true;
+    if !config.read_only {
+        if let Err(error) = check_s3(&config.s3.bucket).await {
+            warn!(
+                ?error,
+                "s3 storage backend not available, but not running in read-only mode"
+            );
+            // config.read_only = true;
+        }
     }
 
-    info!(logger, "{:?}", config);
+    info!(?config, "config loaded");
 
-    info!(logger, "starting server...");
+    info!("starting server...");
 
     let metrics = Arc::new(Metrics::default());
     let metrics_download = metrics.clone();
@@ -81,7 +123,7 @@ async fn rocket() -> rocket::Rocket {
 
         // Spawn caching future.
         tokio::spawn(async move {
-            download_artifacts(rx, Client::new(), logger, config_download, metrics_download).await;
+            download_artifacts(rx, Client::new(), config_download, metrics_download).await;
         });
 
         tx
