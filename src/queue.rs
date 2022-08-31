@@ -1,31 +1,39 @@
-use rocket::fairing::{Fairing, Info, Kind};
-use rocket::http::Header;
-use rocket::http::Method;
-use rocket::{Request, Response};
+use std::future::Future;
 
-use crate::common::IntelMission;
+use actix_web::body::BoxBody;
+use actix_web::dev::{Service, ServiceRequest, ServiceResponse};
+use actix_web::http::header::HeaderName;
+use actix_web::http::Method;
+use actix_web::web;
 
-/// Middleware that sets `X-Intel-Queue-Length` header to current task queue length.
-pub struct QueueLength {
-    pub mission: IntelMission,
-}
+use crate::IntelMission;
 
-#[rocket::async_trait]
-impl Fairing for QueueLength {
-    fn info(&self) -> Info {
-        Info {
-            name: "Queue length in Header",
-            kind: Kind::Response,
+pub fn queue_length<S>(
+    req: ServiceRequest,
+    srv: &S,
+) -> impl Future<Output = Result<ServiceResponse, actix_web::Error>>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<BoxBody>, Error = actix_web::Error>,
+{
+    let length = (req.method() == Method::GET).then(|| {
+        let mission = req
+            .app_data::<web::Data<IntelMission>>()
+            .expect("mission extension not found")
+            .clone();
+        mission.metrics.task_in_queue.get()
+    });
+    let fut = srv.call(req);
+    async move {
+        let mut resp: ServiceResponse<_> = fut.await?;
+        if let Some(length) = length {
+            // Rewrite the response to return the current counts.
+            resp.headers_mut().append(
+                HeaderName::from_static("x-intel-queue-length"),
+                length.into(),
+            );
+            return Ok(resp);
         }
-    }
 
-    async fn on_response<'r>(&self, request: &'r Request<'_>, response: &mut Response<'r>) {
-        // Rewrite the response to return the current counts.
-        if request.method() == Method::Get {
-            response.set_header(Header::new(
-                "X-Intel-Queue-Length",
-                self.mission.metrics.task_in_queue.get().to_string(),
-            ));
-        }
+        Ok(resp)
     }
 }

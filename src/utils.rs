@@ -1,16 +1,12 @@
-use std::io::Cursor;
-
+use actix_web::body::{BodyStream, SizedStream};
+use actix_web::http::header::ContentType;
+use actix_web::http::{header, StatusCode, Uri};
+use actix_web::{HttpResponse, Responder};
 use futures::stream::TryStreamExt;
-use response::ResponseBuilder;
-use rocket::{
-    http::ContentType,
-    response::{self, Redirect},
-    Response,
-};
-use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::debug;
 use url::Url;
 
+use crate::common::Redirect;
 use crate::common::{Config, IntelMission, IntelObject, IntelResponse, Task};
 use crate::error::{Error, Result};
 
@@ -99,8 +95,8 @@ impl IntelObject {
     /// Respond with redirection.
     pub fn redirect(self, config: &Config) -> Redirect {
         match &self {
-            Self::Cached { .. } => Redirect::moved(self.target_url(config).to_string()),
-            Self::Origin { .. } => Redirect::found(self.target_url(config).to_string()),
+            Self::Cached { .. } => Redirect::Permanent(self.target_url(config).to_string()),
+            Self::Origin { .. } => Redirect::Temporary(self.target_url(config).to_string()),
         }
     }
 
@@ -111,7 +107,7 @@ impl IntelObject {
         below_size_kb: u64, // only responses with size below this will be rewritten
         f: impl Fn(String) -> String,
         config: &Config,
-    ) -> Result<IntelResponse<'static>> {
+    ) -> Result<IntelResponse> {
         let task = self.task();
         let upstream = task.upstream_url();
         let resp = intel_mission.client.get(upstream).send().await?;
@@ -121,9 +117,9 @@ impl IntelObject {
                 if content_length <= below_size_kb * 1024 {
                     let text = resp.text().await?;
                     let text = f(text);
-                    return Ok(Response::build()
-                        .streamed_body(Cursor::new(text))
-                        .finalize()
+                    return Ok(HttpResponse::Ok()
+                        .content_type(ContentType::octet_stream())
+                        .body(text)
                         .into());
                 }
             }
@@ -132,65 +128,30 @@ impl IntelObject {
         Ok(self.redirect(config).into())
     }
 
-    /// Pass status code from upstream to new response.
-    fn set_status(intel_response: &mut ResponseBuilder, response: &reqwest::Response) {
-        let status = response.status();
-        // special case for NGINX 499
-        if status.as_u16() == 499 {
-            intel_response.status(rocket::http::Status::NotFound);
-        } else if let Some(reason) = status.canonical_reason() {
-            intel_response.status(rocket::http::Status::new(status.as_u16(), reason));
-        } else {
-            intel_response.status(rocket::http::Status::new(status.as_u16(), ""));
-        }
-    }
-
     /// Respond with reverse proxy.
-    pub async fn reverse_proxy(
-        self,
-        intel_mission: &IntelMission,
-    ) -> Result<IntelResponse<'static>> {
-        match self {
-            Self::Cached { resp, .. } => {
-                let mut intel_response = Response::build();
-                if let Some(content_length) = resp.content_length() {
-                    intel_response.raw_header("content-length", content_length.to_string());
-                }
-                if let Some(content_type) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
-                    if let Ok(content_type) = content_type.to_str() {
-                        intel_response.raw_header("content-type", content_type.to_string());
-                    }
-                }
-                Self::set_status(&mut intel_response, &resp);
-                intel_response.streamed_body(
-                    resp.bytes_stream()
-                        .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
-                        .into_async_read()
-                        .compat(),
-                );
-                Ok(intel_response.finalize().into())
-            }
+    pub async fn reverse_proxy(self, intel_mission: &IntelMission) -> Result<HttpResponse> {
+        let upstream_resp = match self {
+            Self::Cached { resp, .. } => resp,
             Self::Origin { ref task } => {
-                let resp = intel_mission.client.get(task.upstream_url()).send().await?;
-                let mut intel_response = Response::build();
-                if let Some(content_length) = resp.content_length() {
-                    intel_response.raw_header("content-length", content_length.to_string());
-                }
-                if let Some(content_type) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
-                    if let Ok(content_type) = content_type.to_str() {
-                        intel_response.raw_header("content-type", content_type.to_string());
-                    }
-                }
-                Self::set_status(&mut intel_response, &resp);
-                intel_response.streamed_body(
-                    resp.bytes_stream()
-                        .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
-                        .into_async_read()
-                        .compat(),
-                );
-                Ok(intel_response.finalize().into())
+                intel_mission.client.get(task.upstream_url()).send().await?
             }
+        };
+
+        let code = upstream_resp.status().normalize();
+        let mut resp = HttpResponse::build(code);
+        if let Some(content_type) = upstream_resp.headers().get(header::CONTENT_TYPE) {
+            resp.content_type(content_type);
         }
+        let content_length = upstream_resp.content_length();
+        let stream = upstream_resp
+            .bytes_stream()
+            .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e));
+
+        Ok(if let Some(size) = content_length {
+            resp.body(SizedStream::new(size, stream))
+        } else {
+            resp.body(BodyStream::new(stream))
+        })
     }
 
     /// Respond with reverse proxy if it's a small cached file, or redirect otherwise.
@@ -199,13 +160,13 @@ impl IntelObject {
         size_kb: u64,
         intel_mission: &IntelMission,
         config: &Config,
-    ) -> Result<IntelResponse<'static>> {
+    ) -> Result<IntelResponse> {
         match &self {
             Self::Cached { resp, .. } => {
                 if let Some(content_length) = resp.content_length() {
                     if content_length <= size_kb * 1024 {
                         debug!("{} <= {}, direct stream", content_length, size_kb * 1024);
-                        return self.reverse_proxy(intel_mission).await;
+                        return Ok(self.reverse_proxy(intel_mission).await?.into());
                     }
                 }
                 Ok(self.redirect(config).into())
@@ -216,16 +177,15 @@ impl IntelObject {
 }
 
 /// 404 page.
-#[catch(404)]
-pub fn not_found(req: &rocket::Request) -> Response<'static> {
-    no_route_for(&req.uri().to_string())
+#[allow(clippy::unused_async)]
+pub async fn not_found(uri: Uri) -> impl Responder {
+    no_route_for(&uri.to_string())
 }
 
 /// No route page.
 ///
 /// Hint user to redirect to the S3 index page.
-pub fn no_route_for(mut route: &str) -> Response<'static> {
-    let mut resp = Response::build();
+pub fn no_route_for(mut route: &str) -> HttpResponse {
     if route.ends_with('/') {
         route = &route[..route.len() - 1];
     }
@@ -242,7 +202,22 @@ pub fn no_route_for(mut route: &str) -> Response<'static> {
             <p><a href="/{}/?mirror_intel_list">Browse {}</a></p>"#,
         route, route, route
     );
-    resp.sized_body(body.len(), Cursor::new(body));
-    resp.header(ContentType::HTML);
-    resp.finalize()
+    HttpResponse::Ok()
+        .content_type(ContentType::html())
+        .body(body)
+}
+
+trait StatusCodeExt {
+    /// Deal with special case for NGINX 499.
+    fn normalize(self) -> StatusCode;
+}
+
+impl StatusCodeExt for StatusCode {
+    fn normalize(self) -> StatusCode {
+        if self.as_u16() == 499 {
+            Self::NOT_FOUND
+        } else {
+            self
+        }
+    }
 }

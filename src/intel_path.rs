@@ -1,55 +1,72 @@
-use std::path::PathBuf;
+use std::fmt::{Display, Formatter};
+use std::ops::Deref;
 
-use rocket::http::uri::{SegmentError, Segments, Uri};
-use rocket::request::FromSegments;
+use serde::de::Error;
+use serde::{Deserialize, Deserializer};
 
 /// `IntelPath` represents a URL-encoded path which is safe to use both
 /// on s3 and on a normal filesystem.
 pub struct IntelPath(String);
 
-/// This is a modified version of `rocket_http/uri/segments.rs`
-impl<'a> FromSegments<'a> for IntelPath {
-    type Error = SegmentError;
+impl<'de> Deserialize<'de> for IntelPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bad_start = |msg| {
+            Error::custom(format!(
+                "The segment started with invalid character: {}",
+                msg
+            ))
+        };
+        let bad_end =
+            |msg| Error::custom(format!("The segment ended with invalid character: {}", msg));
+        let bad_char =
+            |msg| Error::custom(format!("The segment contained invalid character: {}", msg));
 
-    fn from_segments(segments: Segments<'a>) -> Result<Self, SegmentError> {
-        let mut buf = PathBuf::new();
+        let decoded = String::deserialize(deserializer)?;
+        let segments = decoded
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .filter(|s| *s != ".");
 
+        let mut buf = vec![];
         for segment in segments {
-            let decoded = Uri::percent_decode(segment.as_bytes()).map_err(SegmentError::Utf8)?;
-
-            if decoded == ".." {
+            if segment == ".." {
                 buf.pop();
-            } else if decoded.starts_with('.') {
-                return Err(SegmentError::BadStart('.'));
-            } else if decoded.starts_with('*') {
-                return Err(SegmentError::BadStart('*'));
-            } else if decoded.ends_with(':') {
-                return Err(SegmentError::BadEnd(':'));
-            } else if decoded.ends_with('>') {
-                return Err(SegmentError::BadEnd('>'));
-            } else if decoded.ends_with('<') {
-                return Err(SegmentError::BadEnd('<'));
-            } else if decoded.contains('/') {
-                return Err(SegmentError::BadChar('/'));
-            } else if cfg!(windows) && decoded.contains('\\') {
-                return Err(SegmentError::BadChar('\\'));
+            } else if segment.starts_with('.') {
+                return Err(bad_start('.'));
+            } else if segment.starts_with('*') {
+                return Err(bad_start('*'));
+            } else if segment.ends_with(':') {
+                return Err(bad_end(':'));
+            } else if segment.ends_with('>') {
+                return Err(bad_end('>'));
+            } else if segment.ends_with('<') {
+                return Err(bad_end('<'));
+            } else if segment.contains('/') {
+                return Err(bad_char('/'));
+            } else if cfg!(windows) && segment.contains('\\') {
+                return Err(bad_char('\\'));
             } else {
                 buf.push(segment);
             }
         }
 
-        Ok(Self(buf.into_os_string().into_string().unwrap()))
+        Ok(Self(buf.join("/")))
     }
 }
 
-impl AsRef<str> for IntelPath {
-    fn as_ref(&self) -> &str {
+impl Display for IntelPath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Deref for IntelPath {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-impl From<IntelPath> for String {
-    fn from(path: IntelPath) -> Self {
-        path.0
     }
 }

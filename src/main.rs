@@ -1,13 +1,23 @@
-#[macro_use]
-extern crate rocket;
+#![allow(
+    clippy::future_not_send,
+    clippy::cast_possible_truncation,
+    clippy::module_name_repetitions,
+    clippy::enum_variant_names,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::cast_possible_wrap,
+    clippy::missing_errors_doc
+)]
 
 use std::sync::Arc;
 
+use actix_web::{guard, web, App, HttpServer};
+use figment::providers::{Format, Toml};
+use figment::Figment;
 use prometheus::{Encoder, TextEncoder};
 use reqwest::{Client, ClientBuilder};
-use rocket::State;
 use tokio::sync::mpsc::channel;
 use tracing::{info, warn};
+use tracing_actix_web::TracingLogger;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_log::LogTracer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -17,8 +27,8 @@ use artifacts::download_artifacts;
 use browse::list;
 use common::{Config, IntelMission, Metrics};
 use error::{Error, Result};
-use queue::QueueLength;
-use repos::*;
+use queue::queue_length;
+use repos::{index, repo_routes};
 use storage::check_s3;
 use utils::not_found;
 
@@ -27,7 +37,6 @@ mod browse;
 mod common;
 mod error;
 mod intel_path;
-mod intel_query;
 mod queue;
 mod repos;
 mod storage;
@@ -76,8 +85,8 @@ fn setup_log() -> impl Drop {
 }
 
 /// Metrics endpoint.
-#[get("/metrics")]
-pub async fn metrics(intel_mission: State<'_, IntelMission>) -> Result<Vec<u8>> {
+#[allow(clippy::unused_async)]
+pub async fn metrics_endpoint(intel_mission: web::Data<IntelMission>) -> Result<Vec<u8>> {
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
     let metric_families = intel_mission.metrics.gather();
@@ -87,14 +96,17 @@ pub async fn metrics(intel_mission: State<'_, IntelMission>) -> Result<Vec<u8>> 
     Ok(buffer)
 }
 
-#[launch]
-async fn rocket() -> rocket::Rocket {
+#[tokio::main]
+async fn main() {
     LogTracer::init().unwrap();
     let _guard = setup_log();
 
-    let rocket = rocket::ignite();
-    let figment = rocket.figment();
-    let config: Config = figment.extract().expect("config");
+    let figment = Figment::new()
+        .join(("address", "127.0.0.1"))
+        .join(("port", 8000))
+        .join(Toml::file("mirror-intel.toml").nested())
+        .join(Toml::file("Rocket.toml").nested()); // For backward compatibility
+    let config: Arc<Config> = Arc::new(figment.extract().expect("config"));
 
     info!("checking if bucket is available...");
     // check if credentials are set and we have permissions
@@ -119,7 +131,7 @@ async fn rocket() -> rocket::Rocket {
         // too many requests to large files. See issue #24.
         let (tx, rx) = channel(config.max_pending_task);
 
-        let config_download = Arc::new(config.clone());
+        let config_download = config.clone();
 
         // Spawn caching future.
         tokio::spawn(async move {
@@ -141,53 +153,33 @@ async fn rocket() -> rocket::Rocket {
         s3_client: Arc::new(storage::get_anonymous_s3_client(&config.s3)),
     };
 
-    let queue_length_fairing = QueueLength {
-        mission: mission.clone(),
-    };
+    let addr = config.address.clone();
+    let port = config.port;
+    let workers = config.workers;
 
-    rocket
-        .manage(mission)
-        .manage(config)
-        .attach(queue_length_fairing)
-        .register(catchers![not_found])
-        .mount(
-            "/",
-            routes![
-                list,
-                crates_io_get,
-                crates_io_head,
-                flathub_get,
-                flathub_head,
-                fedora_ostree_get,
-                fedora_ostree_head,
-                fedora_iot_get,
-                fedora_iot_head,
-                pypi_packages_get,
-                pypi_packages_head,
-                homebrew_bottles_get,
-                homebrew_bottles_head,
-                rust_static_get,
-                rust_static_head,
-                dart_pub,
-                guix,
-                pytorch_wheels_get,
-                pytorch_wheels_head,
-                linuxbrew_bottles_get,
-                linuxbrew_bottles_head,
-                sjtug_internal_get,
-                sjtug_internal_head,
-                flutter_infra_get,
-                flutter_infra_head,
-                github_release_get,
-                github_release_head,
-                nix_channels_store,
-                pypi,
-                opam_cache_head,
-                opam_cache_get,
-                gradle_distribution_head,
-                gradle_distribution_get,
-                metrics,
-                index
-            ],
-        )
+    let mut server = HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(mission.clone()))
+            .app_data(web::Data::from(config.clone()))
+            .route(
+                "/{path:.*}",
+                web::get()
+                    .guard(guard::fn_guard(|ctx| {
+                        ctx.head().uri.query() == Some("mirror_intel_list")
+                    }))
+                    .to(list),
+            )
+            .service(repo_routes())
+            .route("/metrics", web::get().to(metrics_endpoint))
+            .route("/{path:.*}", web::get().to(index))
+            .default_service(web::route().to(not_found))
+            .wrap_fn(queue_length)
+            .wrap(TracingLogger::default())
+    });
+
+    if let Some(workers) = workers {
+        server = server.workers(workers);
+    }
+
+    server.bind((&*addr, port)).unwrap().run().await.unwrap();
 }
