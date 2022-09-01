@@ -16,7 +16,7 @@ pub fn simple_intel(
     filter: impl FnMut(&Config, &str) -> bool + Clone + Send + 'static,
     proxy: impl FnMut(&str) -> bool + Clone + Send + 'static,
 ) -> Route {
-    let handler = move |path: web::Path<IntelPath>,
+    let handler = move |path: IntelPath,
                         method: Method,
                         uri: Uri,
                         intel_mission: web::Data<IntelMission>,
@@ -300,7 +300,7 @@ pub fn repo_routes() -> Scope {
 }
 
 pub async fn dart_pub(
-    path: web::Path<IntelPath>,
+    path: IntelPath,
     uri: Uri,
     intel_mission: web::Data<IntelMission>,
     config: web::Data<Config>,
@@ -340,7 +340,7 @@ pub async fn dart_pub(
 }
 
 pub async fn pypi(
-    path: web::Path<IntelPath>,
+    path: IntelPath,
     uri: Uri,
     intel_mission: web::Data<IntelMission>,
     config: web::Data<Config>,
@@ -377,7 +377,7 @@ pub fn nix_intel(
     origin_injection: impl FnMut(&Endpoints) -> &str + Clone + Send + Sync + 'static,
     route: &'static str,
 ) -> Route {
-    let handler = move |path: web::Path<IntelPath>,
+    let handler = move |path: IntelPath,
                         uri: Uri,
                         intel_mission: web::Data<IntelMission>,
                         config: web::Data<Config>| {
@@ -421,12 +421,12 @@ pub fn nix_intel(
 }
 
 #[allow(clippy::unused_async)]
-pub async fn index(path: web::Path<IntelPath>, config: web::Data<Config>) -> IntelResponse {
+pub async fn index(path: IntelPath, config: web::Data<Config>) -> IntelResponse {
     if config
         .endpoints
         .s3_only
         .iter()
-        .any(|x| path.starts_with(x) && &**path != x)
+        .any(|x| path.starts_with(x) && &*path != x)
     {
         return Redirect::Permanent(format!(
             "{}/{}/{}",

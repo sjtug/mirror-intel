@@ -45,7 +45,7 @@ fn generate_url(key: &str, last_modified: &str, size: i64, prefix: &str) -> Stri
 
 /// Directory index page for a given path.
 pub async fn list(
-    path: web::Path<IntelPath>,
+    path: IntelPath,
     config: web::Data<Config>,
     intel_mission: web::Data<IntelMission>,
 ) -> Result<IntelResponse> {
