@@ -437,292 +437,292 @@ pub async fn index(path: IntelPath, config: web::Data<Config>) -> IntelResponse 
     utils::no_route_for(&path).into()
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use std::sync::Arc;
-//
-//     use reqwest::ClientBuilder;
-//     use rocket::http::Status;
-//     use tokio::sync::mpsc::{channel, Receiver};
-//
-//     use crate::queue::QueueLength;
-//     use crate::utils::not_found;
-//     use crate::{
-//         common::{Config, EndpointOverride, IntelMission, Metrics},
-//         storage::get_anonymous_s3_client,
-//     };
-//
-//     use super::*;
-//
-//     async fn make_rocket() -> (rocket::local::asynchronous::Client, Config, Receiver<Task>) {
-//         use rocket::local::asynchronous::Client;
-//         let rocket = rocket::ignite();
-//         let figment = rocket.figment();
-//         let mut config: Config = figment.extract().expect("config");
-//         config.read_only = true;
-//
-//         let (tx, rx) = channel(1024);
-//         let client = ClientBuilder::new()
-//             .user_agent(&config.user_agent)
-//             .build()
-//             .unwrap();
-//
-//         let mission = IntelMission {
-//             tx: Some(tx),
-//             client,
-//             metrics: Arc::new(Metrics::default()),
-//             s3_client: Arc::new(get_anonymous_s3_client(&config.s3)),
-//         };
-//
-//         let queue_length_fairing = QueueLength {
-//             mission: mission.clone(),
-//         };
-//
-//         let rocket = rocket
-//             .manage(mission)
-//             .manage(config.clone())
-//             .attach(queue_length_fairing)
-//             .register(catchers![not_found])
-//             .mount(
-//                 "/",
-//                 routes![
-//                      sjtug_internal_head,
-//                      sjtug_internal_get,
-//                      pytorch_wheels_head,
-//                      pytorch_wheels_get
-//                  ],
-//             );
-//
-//         (
-//             Client::tracked(rocket)
-//                 .await
-//                 .expect("valid rocket instance"),
-//             config,
-//             rx,
-//         )
-//     }
-//
-//     fn exist_object() -> Task {
-//         Task {
-//             storage: "sjtug-internal",
-//             origin: "https://github.com/sjtug".to_string(),
-//             path: "mirror-clone/releases/download/v0.1.7/mirror-clone.tar.gz".to_string(),
-//             retry_limit: 3,
-//         }
-//     }
-//
-//     fn missing_object() -> Task {
-//         Task {
-//             storage: "sjtug-internal",
-//             origin: "https://github.com/sjtug".to_string(),
-//             path: "mirror-clone/releases/download/v0.1.7/mirror-clone-2333.tar.gz".to_string(),
-//             retry_limit: 3,
-//         }
-//     }
-//
-//     fn forbidden_object() -> Task {
-//         Task {
-//             storage: "sjtug-internal",
-//             origin: "https://github.com/sjtug".to_string(),
-//             path: "mirror-clone/releases/download/v0.1.7/forbidden/mirror-clone.tar.gz".to_string(),
-//             retry_limit: 3,
-//         }
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_redirect_exist_get() {
-//         // if an object exists in s3, we should permanently redirect users to s3
-//         let (client, config, _rx) = make_rocket().await;
-//         let object = exist_object();
-//         let response = client.get(object.root_path()).dispatch().await;
-//         assert_eq!(response.status(), Status::MovedPermanently);
-//         assert_eq!(
-//             response.headers().get("Location").collect::<Vec<&str>>(),
-//             vec![object.cached_url(&config).as_str()]
-//         );
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_redirect_exist_head() {
-//         let (client, config, _rx) = make_rocket().await;
-//         let object = exist_object();
-//         let response = client.head(object.root_path()).dispatch().await;
-//         assert_eq!(response.status(), Status::MovedPermanently);
-//         assert_eq!(
-//             response.headers().get("Location").collect::<Vec<&str>>(),
-//             vec![object.cached_url(&config).as_str()]
-//         );
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_redirect_missing_get() {
-//         // if an object doesn't exist in s3, we should temporarily redirect users to upstream
-//         let (client, _, _rx) = make_rocket().await;
-//         let object = missing_object();
-//         let response = client.get(object.root_path()).dispatch().await;
-//         assert_eq!(response.status(), Status::Found);
-//         assert_eq!(
-//             response.headers().get("Location").collect::<Vec<&str>>(),
-//             vec![object.upstream_url().as_str()]
-//         );
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_redirect_missing_head() {
-//         // if an object doesn't exist in s3, we should temporarily redirect users to upstream
-//         let (client, _, _rx) = make_rocket().await;
-//         let object = missing_object();
-//         let response = client.head(object.root_path()).dispatch().await;
-//         assert_eq!(response.status(), Status::Found);
-//         assert_eq!(
-//             response.headers().get("Location").collect::<Vec<&str>>(),
-//             vec![object.upstream_url().as_str()]
-//         );
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_redirect_forbidden_get() {
-//         // if an object is filtered, we should permanently redirect users to upstream
-//         let (client, _, _rx) = make_rocket().await;
-//         let object = forbidden_object();
-//         let response = client.get(object.root_path()).dispatch().await;
-//         assert_eq!(response.status(), Status::MovedPermanently);
-//         assert_eq!(
-//             response.headers().get("Location").collect::<Vec<&str>>(),
-//             vec![object.upstream_url().as_str()]
-//         );
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_redirect_forbidden_head() {
-//         // if an object is filtered, we should permanently redirect users to upstream
-//         let (client, _, _rx) = make_rocket().await;
-//         let object = forbidden_object();
-//         let response = client.head(object.root_path()).dispatch().await;
-//         assert_eq!(response.status(), Status::MovedPermanently);
-//         assert_eq!(
-//             response.headers().get("Location").collect::<Vec<&str>>(),
-//             vec![object.upstream_url().as_str()]
-//         );
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_url_segment() {
-//         // this case is to test if we could process escaped URL correctly
-//         let (client, _, _rx) = make_rocket().await;
-//         let object = Task {
-//             storage: "sjtug-internal",
-//             origin: "https://github.com/sjtug".to_string(),
-//             path: "mirror-clone/releases/download/v0.1.7/mirror%2B%2B%2B-clone.tar.gz".to_string(),
-//             retry_limit: 3,
-//         };
-//         let response = client.head(object.root_path()).dispatch().await;
-//         assert_eq!(response.status(), Status::Found);
-//         assert_eq!(
-//             response.headers().get("Location").collect::<Vec<&str>>(),
-//             vec![object.upstream_url().as_str()]
-//         );
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_url_segment_fail() {
-//         // this case is to test if we could process escaped URL correctly
-//         let (client, _, _rx) = make_rocket().await;
-//         let object = Task {
-//             storage: "sjtug-internal",
-//             origin: "https://github.com/sjtug".to_string(),
-//             path: "mirror-clone/releases/download/v0.1.7/.mirror%2B%2B%2B-clone.tar.gz".to_string(),
-//             retry_limit: 3,
-//         };
-//         let response = client.head(object.root_path()).dispatch().await;
-//         assert_eq!(response.status(), Status::NotFound);
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_url_segment_query() {
-//         // this case is to test if we could process escaped URL correctly
-//         let (client, _, _rx) = make_rocket().await;
-//         let object = Task {
-//             storage: "sjtug-internal",
-//             origin: "https://github.com/sjtug".to_string(),
-//             path:
-//             "mirror-clone/releases/download/v0.1.7/mirror-clone.tar.gz?ci=233333&ci2=23333333"
-//                 .to_string(),
-//             retry_limit: 3,
-//         };
-//         let response = client.get(object.root_path()).dispatch().await;
-//         assert_eq!(response.status(), Status::Found);
-//         assert_eq!(
-//             response.headers().get("Location").collect::<Vec<&str>>(),
-//             vec![object.upstream_url().as_str()]
-//         );
-//     }
-//
-//     #[test]
-//     fn test_flutter_allow() {
-//         let config = Config::default();
-//         assert!(!flutter_allow(&config, "releases/releases_windows.json"));
-//         assert!(!flutter_allow(&config, "releases/releases_linux.json"));
-//         assert!(flutter_allow(
-//             &config,
-//             "releases/stable/linux/flutter_linux_1.17.0-stable.tar.xz",
-//         ));
-//         assert!(flutter_allow(
-//             &config,
-//             "flutter/069b3cf8f093d44ec4bae1319cbfdc4f8b4753b6/android-arm/artifacts.zip",
-//         ));
-//         assert!(flutter_allow(
-//             &config,
-//             "flutter/fonts/03bdd42a57aff5c496859f38d29825843d7fe68e/fonts.zip",
-//         ));
-//         assert!(!flutter_allow(&config, "flutter/coverage/lcov.info"));
-//     }
-//
-//     #[test]
-//     fn test_task_override() {
-//         let mut task = Task {
-//             storage: "flutter_infra",
-//             retry_limit: 233,
-//             origin: "https://storage.flutter-io.cn/".to_string(),
-//             path: "test".to_string(),
-//         };
-//         task.apply_override(&[EndpointOverride {
-//             name: "flutter".to_string(),
-//             pattern: "https://storage.flutter-io.cn/".to_string(),
-//             replace: "https://storage.googleapis.com/".to_string(),
-//         }]);
-//         assert_eq!(task.origin, "https://storage.googleapis.com/");
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_proxy_head() {
-//         // if an object doesn't exist in s3, we should temporarily redirect users to upstream
-//         let (client, _, _rx) = make_rocket().await;
-//         let object = Task {
-//             storage: "pytorch-wheels",
-//             origin: "https://download.pytorch.org/whl".to_string(),
-//             path: "torch_stable.html".to_string(),
-//             retry_limit: 3,
-//         };
-//         let response = client.head(object.root_path()).dispatch().await;
-//         assert_eq!(response.status(), Status::Ok);
-//     }
-//
-//     #[rocket::async_test]
-//     async fn test_github_release() {
-//         let mut config = Config::default();
-//         config.github_release.allow.push("sjtug/lug/".to_string());
-//         assert!(github_release_allow(
-//             &config,
-//             "sjtug/lug/releases/download/v0.0.0/test.txt",
-//         ));
-//         assert!(!github_release_allow(
-//             &config,
-//             "sjtug/lug/2333/releases/download/v0.0.0/test.txt",
-//         ));
-//         assert!(!github_release_allow(
-//             &config,
-//             "sjtug/lug2/releases/download/v0.0.0/test.txt",
-//         ));
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use actix_http::Request;
+    use actix_web::dev::{Service, ServiceResponse};
+    use actix_web::http::StatusCode;
+    use actix_web::test::{call_service, init_service, TestRequest};
+    use actix_web::App;
+    use figment::providers::{Format, Toml};
+    use figment::Figment;
+    use reqwest::ClientBuilder;
+    use rstest::rstest;
+    use tokio::sync::mpsc::{channel, Receiver};
+    use url::Url;
+
+    use crate::common::EndpointOverride;
+    use crate::{
+        common::{Config, IntelMission, Metrics},
+        list, not_found, queue_length,
+        storage::get_anonymous_s3_client,
+    };
+
+    use super::*;
+
+    async fn make_service() -> (
+        impl Service<Request, Response = ServiceResponse, Error = actix_web::Error>,
+        Arc<Config>,
+        Receiver<Task>,
+    ) {
+        let figment = Figment::new()
+            .join(("address", "127.0.0.1"))
+            .join(("port", 8000))
+            .join(Toml::file("Rocket.toml").nested());
+        let mut config: Config = figment.extract().expect("config");
+        config.read_only = true;
+        let config = Arc::new(config);
+
+        let (tx, rx) = channel(1024);
+        let client = ClientBuilder::new()
+            .user_agent(&config.user_agent)
+            .build()
+            .unwrap();
+
+        let mission = IntelMission {
+            tx: Some(tx),
+            client,
+            metrics: Arc::new(Metrics::default()),
+            s3_client: Arc::new(get_anonymous_s3_client(&config.s3)),
+        };
+
+        let app = App::new()
+            .app_data(web::Data::new(mission.clone()))
+            .app_data(web::Data::from(config.clone()))
+            .route(
+                "/{path:.*}",
+                web::get()
+                    .guard(guard::fn_guard(|ctx| {
+                        ctx.head().uri.query() == Some("mirror_intel_list")
+                    }))
+                    .to(list),
+            )
+            .route(
+                "/pytorch-wheels/{path:.*}",
+                simple_intel(
+                    |c| &c.pytorch_wheels,
+                    "pytorch-wheels",
+                    wheels_allow,
+                    wheels_proxy,
+                ),
+            )
+            .route(
+                "/sjtug-internal/{path:.*}",
+                simple_intel(
+                    |c| &c.sjtug_internal,
+                    "sjtug-internal",
+                    sjtug_internal_allow,
+                    disallow_all,
+                ),
+            )
+            .route("/{path:.*}", web::get().to(index))
+            .default_service(web::route().to(not_found))
+            .wrap_fn(queue_length);
+
+        let service = init_service(app).await;
+
+        (service, config, rx)
+    }
+
+    fn exist_object() -> Task {
+        Task {
+            storage: "sjtug-internal",
+            origin: "https://github.com/sjtug".to_string(),
+            path: "mirror-clone/releases/download/v0.1.7/mirror-clone.tar.gz".to_string(),
+            retry_limit: 3,
+        }
+    }
+
+    fn missing_object() -> Task {
+        Task {
+            storage: "sjtug-internal",
+            origin: "https://github.com/sjtug".to_string(),
+            path: "mirror-clone/releases/download/v0.1.7/mirror-clone-2333.tar.gz".to_string(),
+            retry_limit: 3,
+        }
+    }
+
+    fn forbidden_object() -> Task {
+        Task {
+            storage: "sjtug-internal",
+            origin: "https://github.com/sjtug".to_string(),
+            path: "mirror-clone/releases/download/v0.1.7/forbidden/mirror-clone.tar.gz".to_string(),
+            retry_limit: 3,
+        }
+    }
+
+    #[rstest]
+    #[case(
+        Method::GET,
+        exist_object(),
+        StatusCode::PERMANENT_REDIRECT,
+        Task::cached_url
+    )]
+    #[case(
+        Method::HEAD,
+        exist_object(),
+        StatusCode::PERMANENT_REDIRECT,
+        Task::cached_url
+    )]
+    #[case(Method::GET, missing_object(), StatusCode::TEMPORARY_REDIRECT, | o: & Task, _c: & Config | o.upstream_url())]
+    #[case(Method::HEAD, missing_object(), StatusCode::TEMPORARY_REDIRECT, | o: & Task, _c: & Config | o.upstream_url())]
+    #[case(Method::GET, forbidden_object(), StatusCode::PERMANENT_REDIRECT, | o: & Task, _c: & Config | o.upstream_url())]
+    #[case(Method::HEAD, forbidden_object(), StatusCode::PERMANENT_REDIRECT, | o: & Task, _c: & Config | o.upstream_url())]
+    #[tokio::test]
+    async fn test_get_head(
+        #[case] method: Method,
+        #[case] object: Task,
+        #[case] expected_status: StatusCode,
+        #[case] expected_location_injection: impl FnOnce(&Task, &Config) -> Url,
+    ) {
+        // if an object is filtered, we should permanently redirect users to upstream
+        let (service, config, _rx) = make_service().await;
+        let req = TestRequest::default()
+            .method(method)
+            .uri(object.root_path().as_str())
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), expected_status);
+        assert_eq!(
+            resp.headers().get("Location").unwrap().to_str().unwrap(),
+            expected_location_injection(&object, &*config).as_str()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_url_segment() {
+        // this case is to test if we could process escaped URL correctly
+        let (service, _, _rx) = make_service().await;
+        let object = Task {
+            storage: "sjtug-internal",
+            origin: "https://github.com/sjtug".to_string(),
+            path: "mirror-clone/releases/download/v0.1.7/mirror%2B%2B%2B-clone.tar.gz".to_string(),
+            retry_limit: 3,
+        };
+        let req = TestRequest::default()
+            .method(Method::HEAD)
+            .uri(object.root_path().as_str())
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            resp.headers().get("Location").unwrap().to_str().unwrap(),
+            object.upstream_url().as_str()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_url_segment_fail() {
+        // this case is to test if we could process escaped URL correctly
+        let (service, _, _rx) = make_service().await;
+        let object = Task {
+            storage: "sjtug-internal",
+            origin: "https://github.com/sjtug".to_string(),
+            path: "mirror-clone/releases/download/v0.1.7/.mirror%2B%2B%2B-clone.tar.gz".to_string(),
+            retry_limit: 3,
+        };
+        let req = TestRequest::default()
+            .method(Method::HEAD)
+            .uri(object.root_path().as_str())
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_url_segment_query() {
+        // this case is to test if we could process escaped URL correctly
+        let (service, _, _rx) = make_service().await;
+        let object = Task {
+            storage: "sjtug-internal",
+            origin: "https://github.com/sjtug".to_string(),
+            path:
+                "mirror-clone/releases/download/v0.1.7/mirror-clone.tar.gz?ci=233333&ci2=23333333"
+                    .to_string(),
+            retry_limit: 3,
+        };
+        let req = TestRequest::get()
+            .uri(object.root_path().as_str())
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            resp.headers().get("Location").unwrap(),
+            object.upstream_url().as_str()
+        );
+    }
+
+    #[test]
+    fn test_flutter_allow() {
+        let config = Config::default();
+        assert!(!flutter_allow(&config, "releases/releases_windows.json"));
+        assert!(!flutter_allow(&config, "releases/releases_linux.json"));
+        assert!(flutter_allow(
+            &config,
+            "releases/stable/linux/flutter_linux_1.17.0-stable.tar.xz",
+        ));
+        assert!(flutter_allow(
+            &config,
+            "flutter/069b3cf8f093d44ec4bae1319cbfdc4f8b4753b6/android-arm/artifacts.zip",
+        ));
+        assert!(flutter_allow(
+            &config,
+            "flutter/fonts/03bdd42a57aff5c496859f38d29825843d7fe68e/fonts.zip",
+        ));
+        assert!(!flutter_allow(&config, "flutter/coverage/lcov.info"));
+    }
+
+    #[test]
+    fn test_task_override() {
+        let mut task = Task {
+            storage: "flutter_infra",
+            retry_limit: 233,
+            origin: "https://storage.flutter-io.cn/".to_string(),
+            path: "test".to_string(),
+        };
+        task.apply_override(&[EndpointOverride {
+            name: "flutter".to_string(),
+            pattern: "https://storage.flutter-io.cn/".to_string(),
+            replace: "https://storage.googleapis.com/".to_string(),
+        }]);
+        assert_eq!(task.origin, "https://storage.googleapis.com/");
+    }
+
+    #[tokio::test]
+    async fn test_proxy_head() {
+        // if an object doesn't exist in s3, we should temporarily redirect users to upstream
+        let (service, _, _rx) = make_service().await;
+        let object = Task {
+            storage: "pytorch-wheels",
+            origin: "https://download.pytorch.org/whl".to_string(),
+            path: "torch_stable.html".to_string(),
+            retry_limit: 3,
+        };
+        let req = TestRequest::default()
+            .method(Method::HEAD)
+            .uri(object.root_path().as_str())
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_github_release() {
+        let mut config = Config::default();
+        config.github_release.allow.push("sjtug/lug/".to_string());
+        assert!(github_release_allow(
+            &config,
+            "sjtug/lug/releases/download/v0.0.0/test.txt",
+        ));
+        assert!(!github_release_allow(
+            &config,
+            "sjtug/lug/2333/releases/download/v0.0.0/test.txt",
+        ));
+        assert!(!github_release_allow(
+            &config,
+            "sjtug/lug2/releases/download/v0.0.0/test.txt",
+        ));
+    }
+}
