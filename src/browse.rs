@@ -42,7 +42,10 @@ pub async fn list(
 ) -> Result<IntelResponse<'static>> {
     let mut path_slash: String = path.into();
     path_slash.push('/');
-    let real_endpoint = format!("{}/{}/{}", config.s3.endpoint, config.s3.bucket, path_slash);
+    let real_endpoint = format!(
+        "{}/{}/{}",
+        config.s3.website_endpoint, config.s3.bucket, path_slash
+    );
     let mirror_clone_list = "mirror_clone_list.html";
 
     // First, check if there is mirror-clone index

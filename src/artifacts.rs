@@ -306,7 +306,7 @@ async fn cache_task(task: Task, client: Client, config: &Config) -> Result<()> {
         &key,
         content_length,
         rusoto_s3::StreamingBody::new(stream),
-        &config.s3.bucket,
+        &config.s3,
     )
     .await?;
     info!("upload to bucket");

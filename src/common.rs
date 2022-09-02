@@ -36,7 +36,7 @@ impl Task {
     pub fn cached_url(&self, config: &Config) -> Url {
         Url::parse(&format!(
             "{}/{}/{}/{}",
-            config.s3.endpoint, config.s3.bucket, self.storage, self.path
+            config.s3.website_endpoint, config.s3.bucket, self.storage, self.path
         ))
         .expect("invalid cached url")
     }
@@ -198,8 +198,12 @@ pub struct Endpoints {
 /// Configuration for S3 storage.
 #[derive(Default, Clone, Deserialize, Debug)]
 pub struct S3Config {
-    /// Endpoint of the S3 service.
+    /// Name of the S3 storage.
+    pub name: String,
+    /// S3 endpoint of the storage service.
     pub endpoint: String,
+    /// Website endpoint of the S3 service.
+    pub website_endpoint: String,
     /// Bucket name.
     pub bucket: String,
 }

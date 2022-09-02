@@ -99,7 +99,7 @@ async fn rocket() -> rocket::Rocket {
     info!("checking if bucket is available...");
     // check if credentials are set and we have permissions
     if !config.read_only {
-        if let Err(error) = check_s3(&config.s3.bucket).await {
+        if let Err(error) = check_s3(&config.s3).await {
             warn!(
                 ?error,
                 "s3 storage backend not available, but not running in read-only mode"
@@ -138,7 +138,7 @@ async fn rocket() -> rocket::Rocket {
         tx,
         client,
         metrics,
-        s3_client: Arc::new(storage::get_anonymous_s3_client()),
+        s3_client: Arc::new(storage::get_anonymous_s3_client(&config.s3)),
     };
 
     let queue_length_fairing = QueueLength {

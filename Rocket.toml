@@ -44,5 +44,7 @@ opam_cache = "https://opam.ocaml.org/cache"
 pypi_simple = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 gradle_distribution = "https://services.gradle.org/distributions"
 [default.s3]
+name = "jCloud S3"
 endpoint = "https://s3.jcloud.sjtu.edu.cn"
+website_endpoint = "https://s3.jcloud.sjtu.edu.cn"
 bucket = "899a892efef34b1b944a19981040f55b-oss01"

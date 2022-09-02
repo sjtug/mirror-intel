@@ -346,7 +346,7 @@ pub async fn index(path: IntelPath, config: State<'_, Config>) -> IntelResponse<
     {
         return Redirect::moved(format!(
             "{}/{}/{}",
-            config.s3.endpoint, config.s3.bucket, path
+            config.s3.website_endpoint, config.s3.bucket, path
         ))
         .into();
     }
@@ -387,7 +387,7 @@ mod tests {
             tx: Some(tx),
             client,
             metrics: Arc::new(Metrics::default()),
-            s3_client: Arc::new(get_anonymous_s3_client()),
+            s3_client: Arc::new(get_anonymous_s3_client(&config.s3)),
         };
 
         let queue_length_fairing = QueueLength {
