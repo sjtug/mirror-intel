@@ -1,12 +1,10 @@
 //! S3 storage backend.
 use std::time::Duration;
 
-use crate::common::S3Config;
 use rusoto_core::credential::{AwsCredentials, StaticProvider};
 use rusoto_core::Region;
 use rusoto_s3::{S3Client, S3};
 use tokio::time::timeout;
-use crate::common::S3Config;
 
 use crate::common::S3Config;
 use crate::error::{Error, Result};
