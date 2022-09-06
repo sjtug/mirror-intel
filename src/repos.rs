@@ -591,6 +591,33 @@ mod tests {
         );
     }
 
+    fn is_index_for(name: &str) -> impl FnOnce(&str) + '_ {
+        move |resp| {
+            assert!(resp.contains(&format!("<title>Index of {}/</title>", name)));
+        }
+    }
+
+    fn is_no_route_for(name: &str) -> impl FnOnce(&str) + '_ {
+        move |resp| {
+            assert!(resp.contains(&format!("No route for {}.", name)));
+        }
+    }
+
+    #[rstest]
+    #[case("/pytorch-wheels/", is_no_route_for("pytorch-wheels"))]
+    #[case("/pytorch-wheels", is_no_route_for("pytorch-wheels"))]
+    #[case("/pytorch-wheels/?mirror_intel_list", is_index_for("pytorch-wheels"))]
+    #[case("/pytorch-wheels?mirror_intel_list", is_index_for("pytorch-wheels"))]
+    #[tokio::test]
+    async fn test_index_list_page(#[case] url: &str, #[case] assert_f: impl FnOnce(&str)) {
+        let (service, _config, _rx) = make_service().await;
+        let req = TestRequest::get().uri(url).to_request();
+        let resp = call_service(&service, req).await;
+        let body = body::to_bytes(resp.into_body()).await.unwrap();
+        let text = std::str::from_utf8(&*body).unwrap();
+        assert_f(text);
+    }
+
     #[tokio::test]
     async fn test_url_segment() {
         // this case is to test if we could process escaped URL correctly
