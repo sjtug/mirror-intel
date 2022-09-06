@@ -176,15 +176,15 @@ pub fn gradle_allow(_config: &Config, path: &str) -> bool {
 pub fn repo_routes() -> Scope {
     web::scope("")
         .route(
-            "/crates-io/{path:.*}",
+            "/crates-io/{path:.+}",
             simple_intel(|c| &c.crates_io, "crates_io", allow_all, disallow_all),
         )
         .route(
-            "/flathub/{path:.*}",
+            "/flathub/{path:.+}",
             simple_intel(|c| &c.flathub, "flathub", ostree_allow, disallow_all),
         )
         .route(
-            "/fedora-ostree/{path:.*}",
+            "/fedora-ostree/{path:.+}",
             simple_intel(
                 |c| &c.fedora_ostree,
                 "fedora-ostree",
@@ -193,11 +193,11 @@ pub fn repo_routes() -> Scope {
             ),
         )
         .route(
-            "/fedora-iot/{path:.*}",
+            "/fedora-iot/{path:.+}",
             simple_intel(|c| &c.fedora_iot, "fedora-iot", ostree_allow, disallow_all),
         )
         .route(
-            "/pypi-packages/{path:.*}",
+            "/pypi-packages/{path:.+}",
             simple_intel(
                 |c| &c.pypi_packages,
                 "pypi-packages",
@@ -206,7 +206,7 @@ pub fn repo_routes() -> Scope {
             ),
         )
         .route(
-            "/homebrew-bottles/{path:.*}",
+            "/homebrew-bottles/{path:.+}",
             simple_intel(
                 |c| &c.homebrew_bottles,
                 "homebrew-bottles",
@@ -215,7 +215,7 @@ pub fn repo_routes() -> Scope {
             ),
         )
         .route(
-            "/linuxbrew-bottles/{path:.*}",
+            "/linuxbrew-bottles/{path:.+}",
             simple_intel(
                 |c| &c.linuxbrew_bottles,
                 "linuxbrew-bottles",
@@ -224,7 +224,7 @@ pub fn repo_routes() -> Scope {
             ),
         )
         .route(
-            "/rust-static/{path:.*}",
+            "/rust-static/{path:.+}",
             simple_intel(
                 |c| &c.rust_static,
                 "rust-static",
@@ -233,7 +233,7 @@ pub fn repo_routes() -> Scope {
             ),
         )
         .route(
-            "/pytorch-wheels/{path:.*}",
+            "/pytorch-wheels/{path:.+}",
             simple_intel(
                 |c| &c.pytorch_wheels,
                 "pytorch-wheels",
@@ -242,7 +242,7 @@ pub fn repo_routes() -> Scope {
             ),
         )
         .route(
-            "/sjtug-internal/{path:.*}",
+            "/sjtug-internal/{path:.+}",
             simple_intel(
                 |c| &c.sjtug_internal,
                 "sjtug-internal",
@@ -251,7 +251,7 @@ pub fn repo_routes() -> Scope {
             ),
         )
         .route(
-            "/flutter_infra/{path:.*}",
+            "/flutter_infra/{path:.+}",
             simple_intel(
                 |c| &c.flutter_infra,
                 "flutter_infra",
@@ -260,7 +260,7 @@ pub fn repo_routes() -> Scope {
             ),
         )
         .route(
-            "/flutter_infra_release/{path:.*}",
+            "/flutter_infra_release/{path:.+}",
             simple_intel(
                 |c| &c.flutter_infra_release,
                 "flutter_infra_release",
@@ -269,7 +269,7 @@ pub fn repo_routes() -> Scope {
             ),
         )
         .route(
-            "/github-release/{path:.*}",
+            "/github-release/{path:.+}",
             simple_intel(
                 |c| &c.github_release,
                 "github-release",
@@ -278,11 +278,11 @@ pub fn repo_routes() -> Scope {
             ),
         )
         .route(
-            "/opam-cache/{path:.*}",
+            "/opam-cache/{path:.+}",
             simple_intel(|c| &c.opam_cache, "opam-cache", allow_all, disallow_all),
         )
         .route(
-            "/gradle/distribution/{path:.*}",
+            "/gradle/distribution/{path:.+}",
             simple_intel(
                 |c| &c.gradle_distribution,
                 "gradle/distributions",
@@ -290,11 +290,11 @@ pub fn repo_routes() -> Scope {
                 disallow_all,
             ),
         )
-        .route("/dart-pub/{path:.*}", web::get().to(dart_pub))
-        .route("/pypi/web/simple/{path:.*}", web::get().to(pypi))
-        .route("/guix/{path:.*}", nix_intel(|c| &c.guix, "guix"))
+        .route("/dart-pub/{path:.+}", web::get().to(dart_pub))
+        .route("/pypi/web/simple/{path:.+}", web::get().to(pypi))
+        .route("/guix/{path:.+}", nix_intel(|c| &c.guix, "guix"))
         .route(
-            "/nix-channels/store/{path:.*}",
+            "/nix-channels/store/{path:.+}",
             nix_intel(|c| &c.nix_channels_store, "guix"),
         )
 }
@@ -441,7 +441,7 @@ pub async fn index(path: IntelPath, config: web::Data<Config>) -> IntelResponse 
 mod tests {
     use std::sync::Arc;
 
-    use actix_http::Request;
+    use actix_http::{body, Request};
     use actix_web::dev::{Service, ServiceResponse};
     use actix_web::http::StatusCode;
     use actix_web::test::{call_service, init_service, TestRequest};
@@ -492,7 +492,7 @@ mod tests {
             .app_data(web::Data::new(mission.clone()))
             .app_data(web::Data::from(config.clone()))
             .route(
-                "/{path:.*}",
+                "/{path:.+}",
                 web::get()
                     .guard(guard::fn_guard(|ctx| {
                         ctx.head().uri.query() == Some("mirror_intel_list")
@@ -500,7 +500,7 @@ mod tests {
                     .to(list),
             )
             .route(
-                "/pytorch-wheels/{path:.*}",
+                "/pytorch-wheels/{path:.+}",
                 simple_intel(
                     |c| &c.pytorch_wheels,
                     "pytorch-wheels",
@@ -509,7 +509,7 @@ mod tests {
                 ),
             )
             .route(
-                "/sjtug-internal/{path:.*}",
+                "/sjtug-internal/{path:.+}",
                 simple_intel(
                     |c| &c.sjtug_internal,
                     "sjtug-internal",
@@ -517,7 +517,7 @@ mod tests {
                     disallow_all,
                 ),
             )
-            .route("/{path:.*}", web::get().to(index))
+            .route("/{path:.+}", web::get().to(index))
             .default_service(web::route().to(not_found))
             .wrap_fn(queue_length);
 
