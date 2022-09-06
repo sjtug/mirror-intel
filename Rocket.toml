@@ -10,6 +10,7 @@ ttl = 3
 direct_stream_size_kb = 4
 read_only = false
 download_timeout = 3600
+buffer_path = "/mnt/cache/"
 # log_level = "off"
 
 [default.github_release]

@@ -1,5 +1,6 @@
 //! Common types.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use prometheus::{proto, IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
@@ -252,6 +253,8 @@ pub struct Config {
     pub download_timeout: u64,
     /// Github release related configs.
     pub github_release: GithubReleaseConfig,
+    /// Path of temporary buffer directory.
+    pub buffer_path: PathBuf,
 }
 
 #[derive(Debug, Responder)]

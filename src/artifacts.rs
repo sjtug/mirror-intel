@@ -112,10 +112,12 @@ impl Drop for FileWrapper {
 /// It can be used to download large files from the network.
 async fn into_file_stream(
     mut stream: impl Stream<Item = IOResult> + Unpin,
+    config: &Config,
 ) -> Result<impl Stream<Item = IOResult>> {
-    let path = format!(
-        "/mnt/cache/{}",
-        FILE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    let path = config.buffer_path.join(
+        FILE_ID
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .to_string(),
     );
     let mut file = FileWrapper::open(&path).await?;
     while let Some(v) = stream.next().await {
@@ -347,7 +349,7 @@ async fn into_stream(
             let io_stream = resp.bytes_stream().pipe(into_io_stream);
             if content_length > config.file_threshold_mb * 1024 * 1024 {
                 info!("stream mode: file backend");
-                let stream = io_stream.pipe(into_file_stream).await?;
+                let stream = io_stream.pipe(|s| into_file_stream(s, config)).await?;
                 Ok((content_length, Either::Left(Either::Left(stream))))
             } else if content_length > 1024 * 1024 {
                 info!("stream mode: memory cache");
