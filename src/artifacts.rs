@@ -19,7 +19,7 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc::{unbounded_channel, Receiver, UnboundedSender};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio_util::codec;
-use tracing::{debug, info, instrument, warn};
+use tracing::{info, instrument, warn};
 use url::Url;
 
 use crate::common::{Config, Metrics, Task};
@@ -34,7 +34,7 @@ fn into_io_stream(
 ) -> impl Stream<Item = IOResult> {
     stream.map(move |x| {
         x.map_err(|err| {
-            warn!("failed to receive data: {:?}", err);
+            warn!(error=?err, "failed to receive data");
             std::io::Error::new(std::io::ErrorKind::Other, err)
         })
     })
@@ -87,7 +87,7 @@ impl FileWrapper {
         f.flush().await?;
         let mut f = f.into_inner();
         if let Err(err) = fs::remove_file(&self.path).await {
-            warn!("failed to remove cache file: {:?} {:?}", err, self.path);
+            warn!(error=?err, path=%self.path.display(), "failed to remove cache file");
         }
         f.seek(std::io::SeekFrom::Start(0)).await?;
         Ok(
@@ -260,7 +260,7 @@ impl DownloadCtx<'static> {
             task_fut,
         );
         if let Err(err) = task_fut.await.unwrap_or(Err(Error::Timeout(()))) {
-            warn!("{:?}, ttl={}", err, task_new.retry_limit);
+            warn!(error=?err, ttl=task_new.retry_limit, "failed to download task");
             task_new.retry_limit -= 1;
             self.metrics.failed_download_counter.inc();
 
@@ -300,7 +300,7 @@ async fn cache_task(task: Task, client: Client, config: &Config) -> Result<()> {
         return Ok(());
     }
     let (content_length, stream) = stream_from_url(client, task.upstream_url(), config).await?;
-    info!("get length={}", content_length);
+    info!(content_length, "get length");
     let key = task.s3_key()?;
     let result = stream_to_s3(
         &key,
@@ -309,8 +309,7 @@ async fn cache_task(task: Task, client: Client, config: &Config) -> Result<()> {
         &config.s3,
     )
     .await?;
-    info!("upload to bucket");
-    debug!("{:?}", result);
+    info!(?result, "upload to bucket");
     Ok(())
 }
 
