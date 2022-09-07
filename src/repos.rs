@@ -176,8 +176,8 @@ pub fn gradle_allow(_config: &Config, path: &str) -> bool {
 pub fn repo_routes() -> Scope {
     web::scope("")
         .route(
-            "/crates-io/{path:.+}",
-            simple_intel(|c| &c.crates_io, "crates_io", allow_all, disallow_all),
+            "/crates.io/{path:.+}",
+            simple_intel(|c| &c.crates_io, "crates.io", allow_all, disallow_all),
         )
         .route(
             "/flathub/{path:.+}",
@@ -295,7 +295,7 @@ pub fn repo_routes() -> Scope {
         .route("/guix/{path:.+}", nix_intel(|c| &c.guix, "guix"))
         .route(
             "/nix-channels/store/{path:.+}",
-            nix_intel(|c| &c.nix_channels_store, "guix"),
+            nix_intel(|c| &c.nix_channels_store, "nix-channels/store"),
         )
 }
 
