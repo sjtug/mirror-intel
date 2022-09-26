@@ -19,7 +19,7 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc::{unbounded_channel, Receiver, UnboundedSender};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio_util::codec;
-use tracing::{debug, info, instrument, warn};
+use tracing::{info, instrument, warn};
 use url::Url;
 
 use crate::common::{Config, Metrics, Task};
@@ -34,7 +34,7 @@ fn into_io_stream(
 ) -> impl Stream<Item = IOResult> {
     stream.map(move |x| {
         x.map_err(|err| {
-            warn!("failed to receive data: {:?}", err);
+            warn!(error=?err, "failed to receive data");
             std::io::Error::new(std::io::ErrorKind::Other, err)
         })
     })
@@ -87,7 +87,7 @@ impl FileWrapper {
         f.flush().await?;
         let mut f = f.into_inner();
         if let Err(err) = fs::remove_file(&self.path).await {
-            warn!("failed to remove cache file: {:?} {:?}", err, self.path);
+            warn!(error=?err, path=%self.path.display(), "failed to remove cache file");
         }
         f.seek(std::io::SeekFrom::Start(0)).await?;
         Ok(
@@ -112,10 +112,12 @@ impl Drop for FileWrapper {
 /// It can be used to download large files from the network.
 async fn into_file_stream(
     mut stream: impl Stream<Item = IOResult> + Unpin,
+    config: &Config,
 ) -> Result<impl Stream<Item = IOResult>> {
-    let path = format!(
-        "/mnt/cache/{}",
-        FILE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    let path = config.buffer_path.join(
+        FILE_ID
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .to_string(),
     );
     let mut file = FileWrapper::open(&path).await?;
     while let Some(v) = stream.next().await {
@@ -258,7 +260,7 @@ impl DownloadCtx<'static> {
             task_fut,
         );
         if let Err(err) = task_fut.await.unwrap_or(Err(Error::Timeout(()))) {
-            warn!("{:?}, ttl={}", err, task_new.retry_limit);
+            warn!(error=?err, ttl=task_new.retry_limit, "failed to download task");
             task_new.retry_limit -= 1;
             self.metrics.failed_download_counter.inc();
 
@@ -298,17 +300,16 @@ async fn cache_task(task: Task, client: Client, config: &Config) -> Result<()> {
         return Ok(());
     }
     let (content_length, stream) = stream_from_url(client, task.upstream_url(), config).await?;
-    info!("get length={}", content_length);
+    info!(content_length, "get length");
     let key = task.s3_key()?;
     let result = stream_to_s3(
         &key,
         content_length,
         rusoto_s3::StreamingBody::new(stream),
-        &config.s3.bucket,
+        &config.s3,
     )
     .await?;
-    info!("upload to bucket");
-    debug!("{:?}", result);
+    info!(?result, "upload to bucket");
     Ok(())
 }
 
@@ -347,7 +348,7 @@ async fn into_stream(
             let io_stream = resp.bytes_stream().pipe(into_io_stream);
             if content_length > config.file_threshold_mb * 1024 * 1024 {
                 info!("stream mode: file backend");
-                let stream = io_stream.pipe(into_file_stream).await?;
+                let stream = io_stream.pipe(|s| into_file_stream(s, config)).await?;
                 Ok((content_length, Either::Left(Either::Left(stream))))
             } else if content_length > 1024 * 1024 {
                 info!("stream mode: memory cache");
@@ -426,6 +427,9 @@ pub async fn download_artifacts(
 
 #[cfg(test)]
 mod tests {
+    use futures_util::stream;
+    use futures_util::stream::StreamExt;
+    use httpmock::MockServer;
     use tempdir::TempDir;
 
     use super::*;
@@ -438,5 +442,81 @@ mod tests {
         wrapper.as_mut().write_all(b"233333333").await.unwrap();
         let mut stream = wrapper.into_bytes_stream().await.unwrap();
         assert_eq!(&stream.next().await.unwrap().unwrap(), "233333333");
+    }
+
+    #[tokio::test]
+    async fn must_into_file_stream() {
+        let tmp_dir = TempDir::new("intel").unwrap();
+        let config = Config {
+            buffer_path: tmp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let data = [
+            Ok(Bytes::from_static(b"233333333")),
+            Ok(Bytes::from_static(b"666666666")),
+        ];
+
+        let stream = stream::iter(data);
+        let file_stream = into_file_stream(stream, &config).await.unwrap();
+
+        // Chunking is not guaranteed to be preserved.
+        let expected = b"233333333666666666";
+        let output = file_stream
+            .fold(Vec::new(), |mut acc, b| async move {
+                acc.extend_from_slice(&b.unwrap());
+                acc
+            })
+            .await;
+        assert_eq!(output, expected);
+    }
+
+    #[tokio::test]
+    async fn must_into_memory_stream() {
+        let data = [
+            Ok(Bytes::from_static(b"233333333")),
+            Ok(Bytes::from_static(b"666666666")),
+        ];
+
+        let stream = stream::iter(data);
+        let file_stream = into_memory_stream(100, stream).await.unwrap();
+
+        // A single chunk is returned.
+        let expected = vec![Bytes::from_static(b"233333333666666666")];
+        let output: Vec<_> = file_stream.map(|b| b.unwrap()).collect().await;
+        assert_eq!(output, expected);
+    }
+
+    #[tokio::test]
+    async fn must_from_url() {
+        let tmp_dir = TempDir::new("intel").unwrap();
+        let config = Config {
+            buffer_path: tmp_dir.path().to_path_buf(),
+            file_threshold_mb: 1,
+            ignore_threshold_mb: 1,
+            ..Default::default()
+        };
+
+        let server = MockServer::start_async().await;
+        let _mock = server.mock(|when, then| {
+            when.path("/test.bin");
+            then.status(200).body(b"23333333366666666");
+        });
+
+        let (length, stream) = stream_from_url(
+            Client::new(),
+            server.url("/test.bin").parse().unwrap(),
+            &config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(length, 17);
+        let data = stream
+            .fold(Vec::new(), |mut acc, b| async move {
+                acc.extend_from_slice(&b.unwrap());
+                acc
+            })
+            .await;
+        assert_eq!(data, b"23333333366666666");
     }
 }

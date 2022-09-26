@@ -1,16 +1,12 @@
-use std::io::Cursor;
-
+use actix_web::body::{BodyStream, SizedStream};
+use actix_web::http::header::ContentType;
+use actix_web::http::{header, StatusCode, Uri};
+use actix_web::{HttpResponse, Responder};
 use futures::stream::TryStreamExt;
-use response::ResponseBuilder;
-use rocket::{
-    http::ContentType,
-    response::{self, Redirect},
-    Response,
-};
-use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::debug;
 use url::Url;
 
+use crate::common::Redirect;
 use crate::common::{Config, IntelMission, IntelObject, IntelResponse, Task};
 use crate::error::{Error, Result};
 
@@ -99,8 +95,8 @@ impl IntelObject {
     /// Respond with redirection.
     pub fn redirect(self, config: &Config) -> Redirect {
         match &self {
-            Self::Cached { .. } => Redirect::moved(self.target_url(config).to_string()),
-            Self::Origin { .. } => Redirect::found(self.target_url(config).to_string()),
+            Self::Cached { .. } => Redirect::Permanent(self.target_url(config).to_string()),
+            Self::Origin { .. } => Redirect::Temporary(self.target_url(config).to_string()),
         }
     }
 
@@ -111,7 +107,7 @@ impl IntelObject {
         below_size_kb: u64, // only responses with size below this will be rewritten
         f: impl Fn(String) -> String,
         config: &Config,
-    ) -> Result<IntelResponse<'static>> {
+    ) -> Result<IntelResponse> {
         let task = self.task();
         let upstream = task.upstream_url();
         let resp = intel_mission.client.get(upstream).send().await?;
@@ -121,9 +117,9 @@ impl IntelObject {
                 if content_length <= below_size_kb * 1024 {
                     let text = resp.text().await?;
                     let text = f(text);
-                    return Ok(Response::build()
-                        .streamed_body(Cursor::new(text))
-                        .finalize()
+                    return Ok(HttpResponse::Ok()
+                        .content_type(ContentType::octet_stream())
+                        .body(text)
                         .into());
                 }
             }
@@ -132,65 +128,30 @@ impl IntelObject {
         Ok(self.redirect(config).into())
     }
 
-    /// Pass status code from upstream to new response.
-    fn set_status(intel_response: &mut ResponseBuilder, response: &reqwest::Response) {
-        let status = response.status();
-        // special case for NGINX 499
-        if status.as_u16() == 499 {
-            intel_response.status(rocket::http::Status::NotFound);
-        } else if let Some(reason) = status.canonical_reason() {
-            intel_response.status(rocket::http::Status::new(status.as_u16(), reason));
-        } else {
-            intel_response.status(rocket::http::Status::new(status.as_u16(), ""));
-        }
-    }
-
     /// Respond with reverse proxy.
-    pub async fn reverse_proxy(
-        self,
-        intel_mission: &IntelMission,
-    ) -> Result<IntelResponse<'static>> {
-        match self {
-            Self::Cached { resp, .. } => {
-                let mut intel_response = Response::build();
-                if let Some(content_length) = resp.content_length() {
-                    intel_response.raw_header("content-length", content_length.to_string());
-                }
-                if let Some(content_type) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
-                    if let Ok(content_type) = content_type.to_str() {
-                        intel_response.raw_header("content-type", content_type.to_string());
-                    }
-                }
-                Self::set_status(&mut intel_response, &resp);
-                intel_response.streamed_body(
-                    resp.bytes_stream()
-                        .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
-                        .into_async_read()
-                        .compat(),
-                );
-                Ok(intel_response.finalize().into())
-            }
+    pub async fn reverse_proxy(self, intel_mission: &IntelMission) -> Result<HttpResponse> {
+        let upstream_resp = match self {
+            Self::Cached { resp, .. } => resp,
             Self::Origin { ref task } => {
-                let resp = intel_mission.client.get(task.upstream_url()).send().await?;
-                let mut intel_response = Response::build();
-                if let Some(content_length) = resp.content_length() {
-                    intel_response.raw_header("content-length", content_length.to_string());
-                }
-                if let Some(content_type) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
-                    if let Ok(content_type) = content_type.to_str() {
-                        intel_response.raw_header("content-type", content_type.to_string());
-                    }
-                }
-                Self::set_status(&mut intel_response, &resp);
-                intel_response.streamed_body(
-                    resp.bytes_stream()
-                        .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
-                        .into_async_read()
-                        .compat(),
-                );
-                Ok(intel_response.finalize().into())
+                intel_mission.client.get(task.upstream_url()).send().await?
             }
+        };
+
+        let code = upstream_resp.status().normalize();
+        let mut resp = HttpResponse::build(code);
+        if let Some(content_type) = upstream_resp.headers().get(header::CONTENT_TYPE) {
+            resp.content_type(content_type);
         }
+        let content_length = upstream_resp.content_length();
+        let stream = upstream_resp
+            .bytes_stream()
+            .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e));
+
+        Ok(if let Some(size) = content_length {
+            resp.body(SizedStream::new(size, stream))
+        } else {
+            resp.body(BodyStream::new(stream))
+        })
     }
 
     /// Respond with reverse proxy if it's a small cached file, or redirect otherwise.
@@ -199,13 +160,13 @@ impl IntelObject {
         size_kb: u64,
         intel_mission: &IntelMission,
         config: &Config,
-    ) -> Result<IntelResponse<'static>> {
+    ) -> Result<IntelResponse> {
         match &self {
             Self::Cached { resp, .. } => {
                 if let Some(content_length) = resp.content_length() {
                     if content_length <= size_kb * 1024 {
                         debug!("{} <= {}, direct stream", content_length, size_kb * 1024);
-                        return self.reverse_proxy(intel_mission).await;
+                        return Ok(self.reverse_proxy(intel_mission).await?.into());
                     }
                 }
                 Ok(self.redirect(config).into())
@@ -216,16 +177,15 @@ impl IntelObject {
 }
 
 /// 404 page.
-#[catch(404)]
-pub fn not_found(req: &rocket::Request) -> Response<'static> {
-    no_route_for(&req.uri().to_string())
+#[allow(clippy::unused_async)]
+pub async fn not_found(uri: Uri) -> impl Responder {
+    no_route_for(&uri.to_string())
 }
 
 /// No route page.
 ///
 /// Hint user to redirect to the S3 index page.
-pub fn no_route_for(mut route: &str) -> Response<'static> {
-    let mut resp = Response::build();
+pub fn no_route_for(mut route: &str) -> HttpResponse {
     if route.ends_with('/') {
         route = &route[..route.len() - 1];
     }
@@ -242,7 +202,370 @@ pub fn no_route_for(mut route: &str) -> Response<'static> {
             <p><a href="/{}/?mirror_intel_list">Browse {}</a></p>"#,
         route, route, route
     );
-    resp.sized_body(body.len(), Cursor::new(body));
-    resp.header(ContentType::HTML);
-    resp.finalize()
+    HttpResponse::Ok()
+        .content_type(ContentType::html())
+        .body(body)
+}
+
+trait StatusCodeExt {
+    /// Deal with special case for NGINX 499.
+    fn normalize(self) -> StatusCode;
+}
+
+impl StatusCodeExt for StatusCode {
+    fn normalize(self) -> StatusCode {
+        if self.as_u16() == 499 {
+            Self::NOT_FOUND
+        } else {
+            self
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::sync::Arc;
+
+    use actix_http::body::to_bytes;
+    use httpmock::{Method, MockServer};
+    use reqwest::Client;
+    use tokio::sync::mpsc::{channel, Receiver};
+
+    use crate::common::{IntelObject, IntelResponse, S3Config, Task};
+    use crate::storage::get_anonymous_s3_client;
+    use crate::{Config, IntelMission, Metrics};
+
+    async fn with_mock<F, Fut>(f: F)
+    where
+        F: FnOnce(MockServer, Arc<Config>, IntelMission, Receiver<Task>) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let server = MockServer::start_async().await;
+        let config = Config {
+            s3: S3Config {
+                name: "test".to_string(),
+                endpoint: "http://localhost:8081".to_string(),
+                website_endpoint: server.base_url(),
+                bucket: "bucket".to_string(),
+            },
+            ..Default::default()
+        };
+        let config = Arc::new(config);
+
+        let (tx, rx) = channel(1024);
+        let client = Client::new();
+
+        let mission = IntelMission {
+            tx: Some(tx),
+            client,
+            metrics: Arc::new(Metrics::default()),
+            s3_client: Arc::new(get_anonymous_s3_client(&config.s3)),
+        };
+
+        f(server, config, mission, rx).await;
+    }
+
+    #[tokio::test]
+    async fn must_resolve_cached() {
+        with_mock(|server, config, mission, mut rx| async move {
+            let _mock = server
+                .mock_async(|when, then| {
+                    when.method(Method::GET).path("/bucket/storage/test"); // Matches a GET request.
+                    then.status(200).body("test");
+                })
+                .await;
+            let task = Task {
+                storage: "storage",
+                origin: "".to_string(),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+            let obj = task.resolve(&mission, &config).await.unwrap();
+            match obj {
+                IntelObject::Cached { resp, .. } => {
+                    assert_eq!(resp.text().await.unwrap(), "test", "must retrieve content");
+                }
+                IntelObject::Origin { .. } => panic!("must be cached"),
+            }
+            assert!(rx.try_recv().is_err(), "must not schedule a download");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn must_resolve_cached_no_content() {
+        with_mock(|server, config, mission, mut rx| async move {
+            let _mock = server
+                .mock_async(|when, then| {
+                    when.method(Method::HEAD).path("/bucket/storage/test"); // Matches a HEAD request.
+                    then.status(200).body("test");
+                })
+                .await;
+            let task = Task {
+                storage: "storage",
+                origin: "".to_string(),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+            let obj = task.resolve_no_content(&mission, &config).await.unwrap();
+            match obj {
+                IntelObject::Cached { resp, .. } => {
+                    assert_eq!(resp.text().await.unwrap(), "", "must retrieve nothing");
+                }
+                IntelObject::Origin { .. } => panic!("must be cached"),
+            }
+            assert!(rx.try_recv().is_err(), "must not schedule a download");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn must_resolve_origin() {
+        with_mock(|_server, config, mission, mut rx| async move {
+            let task = Task {
+                storage: "storage",
+                origin: "".to_string(),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+            let obj = task.resolve(&mission, &config).await.unwrap();
+            assert!(matches!(obj, IntelObject::Origin { .. }), "must be origin");
+            assert!(rx.try_recv().is_ok(), "must schedule a download");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn must_resolve_upstream() {
+        with_mock(|server, _, _, mut rx| async move {
+            let _mock_head = server
+                .mock_async(|when, then| {
+                    when.method(Method::HEAD).path("/bucket/storage/test");
+                    then.status(200).body("test");
+                })
+                .await;
+            let _mock_get = server
+                .mock_async(|when, then| {
+                    when.method(Method::GET).path("/bucket/storage/test");
+                    then.status(200).body("test");
+                })
+                .await;
+            let task = Task {
+                storage: "storage",
+                origin: "".to_string(),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+            let obj = task.resolve_upstream();
+            assert!(matches!(obj, IntelObject::Origin { .. }), "must be origin");
+            assert!(rx.try_recv().is_err(), "must not schedule a download");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn must_rewrite_upstream() {
+        with_mock(|server, config, mission, _| async move {
+            let _mock = server
+                .mock_async(|when, then| {
+                    when.method(Method::GET).path("/origin/test");
+                    then.status(200).body("lorem ipsum");
+                })
+                .await;
+            let task = Task {
+                storage: "storage",
+                origin: server.url("/origin"),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+            let obj = task
+                .resolve_upstream()
+                .rewrite_upstream(&mission, 1, |s| s.replace("ipsu", "lore"), &config)
+                .await
+                .unwrap();
+            match obj {
+                IntelResponse::Redirect(_) => panic!("must be response"),
+                IntelResponse::Response(resp) => {
+                    assert_eq!(
+                        resp.headers()
+                            .get("content-type")
+                            .unwrap()
+                            .to_str()
+                            .unwrap(),
+                        "application/octet-stream",
+                        "must be octet-stream"
+                    );
+                    let body = to_bytes(resp.into_body()).await.unwrap();
+                    let text = std::str::from_utf8(&*body).unwrap();
+                    assert_eq!(text, "lorem lorem", "must be rewritten");
+                }
+            }
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn must_not_rewrite_upstream_oversize() {
+        with_mock(|server, config, mission, _| async move {
+            let _mock = server
+                .mock_async(|when, then| {
+                    when.method(Method::GET).path("/origin/test");
+                    then.status(200).body([0; 1025]);
+                })
+                .await;
+            let task = Task {
+                storage: "storage",
+                origin: server.url("/origin"),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+            let obj = task
+                .resolve_upstream()
+                .rewrite_upstream(&mission, 1, |s| s, &config)
+                .await
+                .unwrap();
+            assert!(
+                matches!(obj, IntelResponse::Redirect(_)),
+                "must be redirect"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn must_reverse_proxy_origin() {
+        with_mock(|server, _, mission, _| async move {
+            let _mock = server
+                .mock_async(|when, then| {
+                    when.method(Method::GET).path("/origin/test");
+                    then.status(200)
+                        .header("content-type", "text/plain")
+                        .body(b"test");
+                })
+                .await;
+            let task = Task {
+                storage: "storage",
+                origin: server.url("/origin"),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+            let resp = task
+                .resolve_upstream()
+                .reverse_proxy(&mission)
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.headers()
+                    .get("content-type")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "text/plain",
+                "must forward content-type"
+            );
+            let body = to_bytes(resp.into_body()).await.unwrap();
+            assert_eq!(&*body, b"test", "must be test");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn must_reverse_proxy_cache() {
+        with_mock(|server, config, mission, _| async move {
+            let _mock = server
+                .mock_async(|when, then| {
+                    when.method(Method::GET).path("/bucket/storage/test");
+                    then.status(200)
+                        .header("content-type", "text/plain")
+                        .body("cached");
+                })
+                .await;
+            let task = Task {
+                storage: "storage",
+                origin: server.url("/origin"),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+            let resp = task
+                .resolve(&mission, &config)
+                .await
+                .unwrap()
+                .reverse_proxy(&mission)
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.headers()
+                    .get("content-type")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "text/plain",
+                "must forward content-type"
+            );
+            let body = to_bytes(resp.into_body()).await.unwrap();
+            assert_eq!(&*body, b"cached", "must be cached");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn must_stream_small_cached() {
+        with_mock(|server, config, mission, _| async move {
+            let _mock = server
+                .mock_async(|when, then| {
+                    when.method(Method::GET).path("/bucket/storage/test");
+                    then.status(200).body("cached");
+                })
+                .await;
+            let task = Task {
+                storage: "storage",
+                origin: server.url("/origin"),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+            let resp = task
+                .resolve(&mission, &config)
+                .await
+                .unwrap()
+                .stream_small_cached(1, &mission, &config)
+                .await
+                .unwrap();
+            assert!(
+                matches!(resp, IntelResponse::Response(_)),
+                "must be response"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn must_not_stream_small_cached_oversize() {
+        with_mock(|server, config, mission, _| async move {
+            let _mock = server
+                .mock_async(|when, then| {
+                    when.method(Method::GET).path("/bucket/storage/test");
+                    then.status(200).body([0; 1025]);
+                })
+                .await;
+            let task = Task {
+                storage: "storage",
+                origin: server.url("/origin"),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+            let resp = task
+                .resolve(&mission, &config)
+                .await
+                .unwrap()
+                .stream_small_cached(1, &mission, &config)
+                .await
+                .unwrap();
+            assert!(
+                matches!(resp, IntelResponse::Redirect(_)),
+                "must be redirected"
+            );
+        })
+        .await;
+    }
 }

@@ -1,10 +1,14 @@
 //! Common types.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use actix_web::body::EitherBody;
+use actix_web::http::{header, StatusCode};
+use actix_web::{HttpRequest, HttpResponse, Responder};
+use percent_encoding::percent_decode;
 use prometheus::{proto, IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
 use reqwest::Client;
-use rocket::response;
 use rusoto_s3::S3Client;
 use serde::Deserialize;
 use tokio::sync::mpsc::Sender;
@@ -35,7 +39,7 @@ impl Task {
     pub fn cached_url(&self, config: &Config) -> Url {
         Url::parse(&format!(
             "{}/{}/{}/{}",
-            config.s3.endpoint, config.s3.bucket, self.storage, self.path
+            config.s3.website_endpoint, config.s3.bucket, self.storage, self.path
         ))
         .expect("invalid cached url")
     }
@@ -50,7 +54,8 @@ impl Task {
         Ok(format!(
             "{}/{}",
             self.storage,
-            rocket::http::uri::Uri::percent_decode(self.path.as_bytes())
+            percent_decode(self.path.as_bytes())
+                .decode_utf8()
                 .map_err(|_| Error::DecodePathError(()))?
         ))
     }
@@ -197,8 +202,12 @@ pub struct Endpoints {
 /// Configuration for S3 storage.
 #[derive(Default, Clone, Deserialize, Debug)]
 pub struct S3Config {
-    /// Endpoint of the S3 service.
+    /// Name of the S3 storage.
+    pub name: String,
+    /// S3 endpoint of the storage service.
     pub endpoint: String,
+    /// Website endpoint of the S3 service.
+    pub website_endpoint: String,
     /// Bucket name.
     pub bucket: String,
 }
@@ -215,6 +224,10 @@ pub struct GithubReleaseConfig {
 /// Global application config.
 #[derive(Default, Clone, Deserialize, Debug)]
 pub struct Config {
+    /// Address to listen on.
+    pub address: String,
+    /// Port to listen on.
+    pub port: u16,
     /// Max pending task allowed.
     ///
     /// If the count of pending tasks exceeds this value, early tasks will be ignored.
@@ -252,26 +265,80 @@ pub struct Config {
     pub download_timeout: u64,
     /// Github release related configs.
     pub github_release: GithubReleaseConfig,
+    /// Path of temporary buffer directory.
+    pub buffer_path: PathBuf,
+    /// Worker tasks to serve requests.
+    pub workers: Option<usize>,
 }
 
-#[derive(Debug, Responder)]
-pub enum IntelResponse<'a> {
-    Redirect(response::Redirect),
-    Response(response::Response<'a>),
+/// An empty redirect response to a given URL.
+pub enum Redirect {
+    /// Construct a “permanent” (308) redirect response.
+    Permanent(String),
+    /// Construct a “temporary” (307) redirect response.
+    Temporary(String),
+}
+
+impl From<Redirect> for HttpResponse {
+    fn from(this: Redirect) -> Self {
+        let (code, location) = match this {
+            Redirect::Permanent(url) => (StatusCode::PERMANENT_REDIRECT, url),
+            Redirect::Temporary(url) => (StatusCode::TEMPORARY_REDIRECT, url),
+        };
+        Self::build(code)
+            .insert_header((header::LOCATION, location))
+            .finish()
+    }
+}
+
+impl Responder for Redirect {
+    type Body = ();
+
+    fn respond_to(self, _: &HttpRequest) -> HttpResponse<Self::Body> {
+        HttpResponse::from(self).drop_body()
+    }
+}
+
+/// Convenient struct for response body.
+pub enum IntelResponse {
+    /// Redirect to a given URL.
+    Redirect(Redirect),
+    /// Any other response.
+    Response(HttpResponse),
+}
+
+impl Responder for IntelResponse {
+    type Body = EitherBody<()>;
+
+    fn respond_to(self, req: &HttpRequest) -> HttpResponse<Self::Body> {
+        match self {
+            Self::Redirect(redirect) => redirect.respond_to(req).map_into_left_body(),
+            Self::Response(resp) => resp.respond_to(req).map_into_right_body(),
+        }
+    }
+}
+
+impl From<IntelResponse> for HttpResponse {
+    fn from(resp: IntelResponse) -> Self {
+        match resp {
+            IntelResponse::Redirect(redirect) => redirect.into(),
+            IntelResponse::Response(resp) => resp,
+        }
+    }
 }
 
 macro_rules! impl_from {
-    ($tt: ty, $struct: ty, $variant: expr) => {
-        impl<'a> From<$tt> for $struct {
-            fn from(res: $tt) -> Self {
+    ($ty: ty, $struct: ty, $variant: expr) => {
+        impl From<$ty> for $struct {
+            fn from(res: $ty) -> Self {
                 $variant(res)
             }
         }
     };
 }
 
-impl_from! { response::Redirect, IntelResponse<'a>, IntelResponse::Redirect }
-impl_from! { response::Response<'a>, IntelResponse<'a>, IntelResponse::Response }
+impl_from! { Redirect, IntelResponse, IntelResponse::Redirect }
+impl_from! { HttpResponse, IntelResponse, IntelResponse::Response }
 
 /// Intel object to be served to client.
 ///

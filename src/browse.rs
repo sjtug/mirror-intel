@@ -1,12 +1,13 @@
 //! S3 index page.
 
 use std::borrow::Cow;
-use std::io::Cursor;
+use std::time::Duration;
 
-use rocket::{http::ContentType, response::Redirect, Response, State};
+use actix_web::http::header::ContentType;
+use actix_web::{web, HttpResponse};
 use rusoto_s3::S3;
 
-use crate::common::{Config, IntelMission, IntelResponse};
+use crate::common::{Config, IntelMission, IntelResponse, Redirect};
 use crate::intel_path::IntelPath;
 use crate::{Error, Result};
 
@@ -33,16 +34,26 @@ fn generate_url(key: &str, last_modified: &str, size: i64, prefix: &str) -> Stri
     )
 }
 
+// pub async fn list_middleware<B: Send + 'static>(req: Request<B>, next: Next<B>) -> Response {
+//     if req.uri().query() == Some("mirror_intel_list") {
+//         info!("hit middleware: {}", req.uri());
+//         return list.call(req, Arc::new(())).await
+//     }
+//     info!("pass middleware: {}", req.uri());
+//     next.run(req).await
+// }
+
 /// Directory index page for a given path.
-#[get("/<path..>?mirror_intel_list")]
 pub async fn list(
     path: IntelPath,
-    config: State<'_, Config>,
-    intel_mission: State<'_, IntelMission>,
-) -> Result<IntelResponse<'static>> {
-    let mut path_slash: String = path.into();
-    path_slash.push('/');
-    let real_endpoint = format!("{}/{}/{}", config.s3.endpoint, config.s3.bucket, path_slash);
+    config: web::Data<Config>,
+    intel_mission: web::Data<IntelMission>,
+) -> Result<IntelResponse> {
+    let path_slash = format!("{}/", path);
+    let real_endpoint = format!(
+        "{}/{}/{}",
+        config.s3.website_endpoint, config.s3.bucket, path_slash
+    );
     let mirror_clone_list = "mirror_clone_list.html";
 
     // First, check if there is mirror-clone index
@@ -52,14 +63,14 @@ pub async fn list(
         ..Default::default()
     };
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
+        Duration::from_secs(1),
         intel_mission.s3_client.get_object(req),
     )
     .await
     .map_err(|_| Error::Timeout(()))?;
 
     if result.is_ok() {
-        return Ok(Redirect::permanent(format!("{}{}", real_endpoint, mirror_clone_list)).into());
+        return Ok(Redirect::Permanent(format!("{}{}", real_endpoint, mirror_clone_list)).into());
     }
 
     // Otherwise, generate a dynamic index
@@ -71,13 +82,11 @@ pub async fn list(
         ..Default::default()
     };
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        Duration::from_secs(5),
         intel_mission.s3_client.list_objects(req),
     )
     .await
     .map_err(|_| Error::Timeout(()))??;
-
-    let mut resp = Response::build();
 
     let mut body = r#"<tr>
             <td><a href="..?mirror_intel_list">..</a></td>
@@ -159,7 +168,8 @@ pub async fn list(
         real_endpoint
     );
 
-    resp.sized_body(body.len(), Cursor::new(body));
-    resp.header(ContentType::HTML);
-    Ok(resp.finalize().into())
+    Ok(HttpResponse::Ok()
+        .content_type(ContentType::html())
+        .body(body)
+        .into())
 }
