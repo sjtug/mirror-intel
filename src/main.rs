@@ -102,10 +102,10 @@ async fn main() {
     let _guard = setup_log();
 
     let figment = Figment::new()
-        .join(("address", "127.0.0.1"))
-        .join(("port", 8000))
-        .join(Toml::file("mirror-intel.toml").nested())
-        .join(Toml::file("Rocket.toml").nested()); // For backward compatibility
+        .merge(("address", "127.0.0.1"))
+        .merge(("port", 8000))
+        .merge(Toml::file("Rocket.toml").nested()) // For backward compatibility
+        .merge(Toml::file("mirror-intel.toml").nested());
     let config: Arc<Config> = Arc::new(figment.extract().expect("config"));
 
     info!("checking if bucket is available...");
