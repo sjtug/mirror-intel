@@ -38,3 +38,4 @@ url = "2.2"
 [dev-dependencies]
 tempdir = "0.3"
 httpmock = "0.6"
+figment = { version = "0.10", features = ["test"] }
