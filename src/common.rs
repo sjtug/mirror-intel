@@ -6,6 +6,8 @@ use std::sync::Arc;
 use actix_web::body::EitherBody;
 use actix_web::http::{header, StatusCode};
 use actix_web::{HttpRequest, HttpResponse, Responder};
+use figment::providers::{Format, Serialized, Toml};
+use figment::Figment;
 use percent_encoding::percent_decode;
 use prometheus::{proto, IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
 use reqwest::Client;
@@ -157,7 +159,7 @@ pub struct IntelMission {
 }
 
 /// An upstream endpoint override rule.
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug, Eq, PartialEq)]
 pub struct EndpointOverride {
     /// Name of the rule.
     ///
@@ -172,7 +174,7 @@ pub struct EndpointOverride {
 }
 
 /// Endpoints of origin servers.
-#[derive(Default, Clone, Deserialize, Debug)]
+#[derive(Default, Clone, Deserialize, Debug, Eq, PartialEq)]
 pub struct Endpoints {
     pub rust_static: String,
     pub homebrew_bottles: String,
@@ -200,7 +202,7 @@ pub struct Endpoints {
 }
 
 /// Configuration for S3 storage.
-#[derive(Default, Clone, Deserialize, Debug)]
+#[derive(Default, Clone, Deserialize, Debug, Eq, PartialEq)]
 pub struct S3Config {
     /// Name of the S3 storage.
     pub name: String,
@@ -213,7 +215,7 @@ pub struct S3Config {
 }
 
 /// Configuration for Github Release endpoint.
-#[derive(Default, Clone, Deserialize, Debug)]
+#[derive(Default, Clone, Deserialize, Debug, Eq, PartialEq)]
 pub struct GithubReleaseConfig {
     /// Repositories allowed to be cached.
     ///
@@ -222,7 +224,7 @@ pub struct GithubReleaseConfig {
 }
 
 /// Global application config.
-#[derive(Default, Clone, Deserialize, Debug)]
+#[derive(Default, Clone, Deserialize, Debug, Eq, PartialEq)]
 pub struct Config {
     /// Address to listen on.
     pub address: String,
@@ -348,4 +350,97 @@ pub enum IntelObject {
     Cached { task: Task, resp: reqwest::Response },
     /// Cache miss.
     Origin { task: Task },
+}
+
+pub fn collect_config() -> Config {
+    let figment = Figment::new()
+        .merge(Serialized::default("address", "127.0.0.1"))
+        .merge(Serialized::default("port", 8000))
+        .merge(Toml::file("Rocket.toml").nested()) // For backward compatibility
+        .merge(Toml::file("mirror-intel.toml").nested());
+    figment.extract().expect("config")
+}
+
+#[cfg(test)]
+mod tests {
+    use figment::Jail;
+
+    use crate::common::{
+        collect_config, EndpointOverride, Endpoints, GithubReleaseConfig, S3Config,
+    };
+    use crate::Config;
+
+    #[test]
+    fn must_collect_config() {
+        const MIRROR_INTEL_TOML: &str = include_str!("../tests/config/mirror-intel.toml");
+        const ROCKET_TOML: &str = include_str!("../tests/config/Rocket.toml");
+        Jail::expect_with(|jail| {
+            jail.create_file("mirror-intel.toml", MIRROR_INTEL_TOML)?;
+            jail.create_file("Rocket.toml", ROCKET_TOML)?;
+            let config = collect_config();
+            let expected = Config {
+                address: "0.0.0.0".into(), // Default values can be overridden.
+                port: 8000,                // Default values takes effect if not overridden.
+                max_pending_task: 16384,   // Values in Rocket.toml must be included.
+                concurrent_download: 512,  // mirror-intel.toml takes precedence.
+                endpoints: Endpoints {
+                    rust_static: "https://mirrors.tuna.tsinghua.edu.cn/rustup".into(),
+                    homebrew_bottles: "https://homebrew.bintray.com".into(),
+                    pypi_packages: "https://mirrors.bfsu.edu.cn/pypi/web/packages".into(),
+                    fedora_iot: "https://d2ju0wfl996cmc.cloudfront.net".into(),
+                    fedora_ostree: "https://d2uk5hbyrobdzx.cloudfront.net".into(),
+                    flathub: "https://dl.flathub.org/repo".into(),
+                    crates_io: "https://static.crates.io".into(),
+                    dart_pub: "https://mirrors.tuna.tsinghua.edu.cn/dart-pub".into(),
+                    guix: "https://ci.guix.gnu.org".into(),
+                    pytorch_wheels: "https://download.pytorch.org/whl".into(),
+                    linuxbrew_bottles: "https://linuxbrew.bintray.com".into(),
+                    sjtug_internal: "https://github.com/sjtug".into(),
+                    flutter_infra: "https://storage.flutter-io.cn/flutter_infra".into(),
+                    flutter_infra_release: "https://storage.flutter-io.cn/flutter_infra_release"
+                        .into(),
+                    github_release: "https://github.com".into(),
+                    nix_channels_store: "https://mirrors.tuna.tsinghua.edu.cn/nix-channels/store"
+                        .into(),
+                    pypi_simple: "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple".into(),
+                    opam_cache: "https://opam.ocaml.org/cache".into(),
+                    gradle_distribution: "https://services.gradle.org/distributions".into(),
+                    overrides: vec![
+                        EndpointOverride {
+                            name: "flutter".into(),
+                            pattern: "https://storage.flutter-io.cn/".into(),
+                            replace: "https://storage.googleapis.com/".into(),
+                        },
+                        EndpointOverride {
+                            name: "tuna".into(),
+                            pattern: "https://mirrors.tuna.tsinghua.edu.cn/".into(),
+                            replace: "https://nanomirrors.tuna.tsinghua.edu.cn/".into(),
+                        },
+                    ],
+                    s3_only: vec!["voidlinux/".into()],
+                },
+                s3: S3Config {
+                    name: "jCloud S3".into(),
+                    endpoint: "https://s3.jcloud.sjtu.edu.cn".into(),
+                    website_endpoint: "https://s3.jcloud.sjtu.edu.cn".into(),
+                    bucket: "899a892efef34b1b944a19981040f55b-oss01".into(),
+                },
+                user_agent: "mirror-intel / 0.1 (siyuan.internal.sjtug.org)".into(),
+                file_threshold_mb: 4,
+                ignore_threshold_mb: 1024,
+                base_url: "https://mirrors.sjtug.sjtu.edu.cn".into(),
+                max_retries: 3,
+                direct_stream_size_kb: 4,
+                read_only: false,
+                download_timeout: 3600,
+                github_release: GithubReleaseConfig {
+                    allow: vec!["sjtug/lug/".into(), "FreeCAD/FreeCAD/".into()],
+                },
+                buffer_path: "/mnt/cache/".into(),
+                workers: None,
+            };
+            assert_eq!(config, expected);
+            Ok(())
+        });
+    }
 }

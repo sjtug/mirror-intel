@@ -11,8 +11,6 @@
 use std::sync::Arc;
 
 use actix_web::{guard, web, App, HttpServer};
-use figment::providers::{Format, Toml};
-use figment::Figment;
 use prometheus::{Encoder, TextEncoder};
 use reqwest::{Client, ClientBuilder};
 use tokio::sync::mpsc::channel;
@@ -101,12 +99,7 @@ async fn main() {
     LogTracer::init().unwrap();
     let _guard = setup_log();
 
-    let figment = Figment::new()
-        .merge(("address", "127.0.0.1"))
-        .merge(("port", 8000))
-        .merge(Toml::file("Rocket.toml").nested()) // For backward compatibility
-        .merge(Toml::file("mirror-intel.toml").nested());
-    let config: Arc<Config> = Arc::new(figment.extract().expect("config"));
+    let config: Arc<Config> = Arc::new(common::collect_config());
 
     info!("checking if bucket is available...");
     // check if credentials are set and we have permissions

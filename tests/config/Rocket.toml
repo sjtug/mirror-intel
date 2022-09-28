@@ -1,0 +1,49 @@
+[default]
+address = "0.0.0.0"
+concurrent_download = 256
+user_agent = "mirror-intel / 0.1 (siyuan.internal.sjtug.org)"
+file_threshold_mb = 4
+ignore_threshold_mb = 1024
+base_url = "https://mirrors.sjtug.sjtu.edu.cn"
+ttl = 3
+direct_stream_size_kb = 4
+read_only = false
+download_timeout = 3600
+buffer_path = "/mnt/cache/"
+# log_level = "off"
+
+[default.github_release]
+allow = ["sjtug/lug/", "FreeCAD/FreeCAD/"]
+
+[default.endpoints]
+rust_static = "https://mirrors.tuna.tsinghua.edu.cn/rustup"
+homebrew_bottles = "https://homebrew.bintray.com"
+linuxbrew_bottles = "https://linuxbrew.bintray.com"
+pypi_packages = "https://mirrors.bfsu.edu.cn/pypi/web/packages"
+fedora_iot = "https://d2ju0wfl996cmc.cloudfront.net"
+fedora_ostree = "https://d2uk5hbyrobdzx.cloudfront.net"
+flathub = "https://dl.flathub.org/repo"
+crates_io = "https://static.crates.io"
+dart_pub = "https://mirrors.tuna.tsinghua.edu.cn/dart-pub"
+guix = "https://ci.guix.gnu.org"
+pytorch_wheels = "https://download.pytorch.org/whl"
+sjtug_internal = "https://github.com/sjtug"
+flutter_infra = "https://storage.flutter-io.cn/flutter_infra"
+flutter_infra_release = "https://storage.flutter-io.cn/flutter_infra_release"
+github_release = "https://github.com"
+nix_channels_store = "https://mirrors.tuna.tsinghua.edu.cn/nix-channels/store"
+overrides = [
+    { name = "flutter", pattern = "https://storage.flutter-io.cn/", replace = "https://storage.googleapis.com/" },
+    { name = "tuna", pattern = "https://mirrors.tuna.tsinghua.edu.cn/", replace = "https://nanomirrors.tuna.tsinghua.edu.cn/" }
+]
+s3_only = [
+    "voidlinux/"
+]
+opam_cache = "https://opam.ocaml.org/cache"
+pypi_simple = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+gradle_distribution = "https://services.gradle.org/distributions"
+[default.s3]
+name = "jCloud S3"
+endpoint = "https://s3.jcloud.sjtu.edu.cn"
+website_endpoint = "https://s3.jcloud.sjtu.edu.cn"
+bucket = "899a892efef34b1b944a19981040f55b-oss01"
