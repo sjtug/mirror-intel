@@ -162,8 +162,8 @@ async fn main() {
                     }))
                     .to(list),
             )
-            .service(repo_routes())
             .route("/metrics", web::get().to(metrics_endpoint))
+            .service(repo_routes())
             .route("/{path:.*}", web::get().to(index))
             .default_service(web::route().to(not_found))
             .wrap_fn(queue_length)
