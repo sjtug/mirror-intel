@@ -1,5 +1,5 @@
 use actix_web::http::{Method, Uri};
-use actix_web::{guard, web, HttpResponse, Route, Scope};
+use actix_web::{guard, web, HttpResponse, Route};
 use lazy_static::lazy_static;
 use regex::Regex;
 
@@ -173,8 +173,8 @@ pub fn gradle_allow(_config: &Config, path: &str) -> bool {
     path.ends_with(".zip")
 }
 
-pub fn repo_routes() -> Scope {
-    web::scope("")
+pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
+    config
         .route(
             "/crates.io/{path:.+}",
             simple_intel(|c| &c.crates_io, "crates.io", allow_all, disallow_all),
@@ -296,7 +296,7 @@ pub fn repo_routes() -> Scope {
         .route(
             "/nix-channels/store/{path:.+}",
             nix_intel(|c| &c.nix_channels_store, "nix-channels/store"),
-        )
+        );
 }
 
 pub async fn dart_pub(

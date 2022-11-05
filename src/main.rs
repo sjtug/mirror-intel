@@ -26,7 +26,7 @@ use browse::list;
 use common::{Config, IntelMission, Metrics};
 use error::{Error, Result};
 use queue::queue_length;
-use repos::{index, repo_routes};
+use repos::{configure_repo_routes, index};
 use storage::check_s3;
 use utils::not_found;
 
@@ -154,6 +154,7 @@ async fn main() {
         App::new()
             .app_data(web::Data::new(mission.clone()))
             .app_data(web::Data::from(config.clone()))
+            .route("/metrics", web::get().to(metrics_endpoint))
             .route(
                 "/{path:.*}",
                 web::get()
@@ -162,8 +163,7 @@ async fn main() {
                     }))
                     .to(list),
             )
-            .route("/metrics", web::get().to(metrics_endpoint))
-            .service(repo_routes())
+            .configure(configure_repo_routes)
             .route("/{path:.*}", web::get().to(index))
             .default_service(web::route().to(not_found))
             .wrap_fn(queue_length)
