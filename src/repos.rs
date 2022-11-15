@@ -173,6 +173,19 @@ pub fn gradle_allow(_config: &Config, path: &str) -> bool {
     path.ends_with(".zip")
 }
 
+pub fn julia_allow(_config: &Config, path: &str) -> bool {
+    path == "registries"
+        && path == "registries.eager"
+        && path == "registries.conservative"
+        && path.starts_with("artifact/")
+        && path.starts_with("package/")
+        && path.starts_with("registry/")
+}
+
+pub fn julia_proxy(path: &str) -> bool {
+    path == "registries" && path == "registries.eager" && path == "registries.conservative"
+}
+
 pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
     config
         .route(
@@ -289,6 +302,10 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
                 gradle_allow,
                 disallow_all,
             ),
+        )
+        .route(
+            "/julia/{path:.+}",
+            simple_intel(|c| &c.julia, "julia", julia_allow, julia_proxy),
         )
         .route("/dart-pub/{path:.+}", web::get().to(dart_pub))
         .route("/pypi/web/simple/{path:.+}", web::get().to(pypi))
