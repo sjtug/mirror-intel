@@ -398,17 +398,16 @@ pub fn nix_intel(
                 );
             }
 
-            if task.path.starts_with("nar/") {
+            if task.path.starts_with("nar/") || task.path.ends_with(".narinfo") {
                 Ok(task
                     .resolve(&intel_mission, &config)
                     .await?
                     .reverse_proxy(&intel_mission)
                     .await?
                     .into())
-            } else if task.path.ends_with(".narinfo") {
+            } else if task.path == "nix-cache-info" {
                 Ok(task
-                    .resolve(&intel_mission, &config)
-                    .await?
+                    .resolve_upstream()
                     .reverse_proxy(&intel_mission)
                     .await?
                     .into())
