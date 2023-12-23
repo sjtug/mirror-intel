@@ -32,6 +32,7 @@ flutter_infra = "https://storage.flutter-io.cn/flutter_infra"
 flutter_infra_release = "https://storage.flutter-io.cn/flutter_infra_release"
 github_release = "https://github.com"
 nix_channels_store = "https://mirrors.tuna.tsinghua.edu.cn/nix-channels/store"
+julia = "https://kr.storage.juliahub.com"
 overrides = [
     { name = "flutter", pattern = "https://storage.flutter-io.cn/", replace = "https://storage.googleapis.com/" },
     { name = "tuna", pattern = "https://mirrors.tuna.tsinghua.edu.cn/", replace = "https://nanomirrors.tuna.tsinghua.edu.cn/" }

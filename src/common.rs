@@ -195,6 +195,7 @@ pub struct Endpoints {
     pub pypi_simple: String,
     pub opam_cache: String,
     pub gradle_distribution: String,
+    pub julia: String,
     /// Upstream override rules.
     pub overrides: Vec<EndpointOverride>,
     /// Paths starts with any of these prefixes will be unconditionally redirected to S3 storage.
@@ -405,6 +406,7 @@ mod tests {
                     pypi_simple: "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple".into(),
                     opam_cache: "https://opam.ocaml.org/cache".into(),
                     gradle_distribution: "https://services.gradle.org/distributions".into(),
+                    julia: "https://kr.storage.juliahub.com".into(),
                     overrides: vec![
                         EndpointOverride {
                             name: "flutter".into(),
