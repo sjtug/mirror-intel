@@ -19,7 +19,7 @@ pin-project = "1.0"
 prometheus = "0.13"
 regex = "1"
 reqwest = { version = "0.11", features = ["stream"] }
-rstest = "0.15"
+rstest = "0.18"
 rusoto_core = "0.48.0"
 rusoto_s3 = "0.48.0"
 serde = "1.0"
@@ -28,10 +28,10 @@ thiserror = "1.0"
 tokio = { version = "1.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 tracing = "0.1"
-tracing-actix-web = "0.6"
+tracing-actix-web = "0.7"
 tracing-appender = "0.2"
 tracing-bunyan-formatter = "0.3"
-tracing-log = "0.1"
+tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.2"
 

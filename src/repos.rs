@@ -574,19 +574,19 @@ mod tests {
     #[case(
         Method::GET,
         exist_object(),
-        StatusCode::PERMANENT_REDIRECT,
+        StatusCode::MOVED_PERMANENTLY,
         Task::cached_url
     )]
     #[case(
         Method::HEAD,
         exist_object(),
-        StatusCode::PERMANENT_REDIRECT,
+        StatusCode::MOVED_PERMANENTLY,
         Task::cached_url
     )]
-    #[case(Method::GET, missing_object(), StatusCode::TEMPORARY_REDIRECT, | o: & Task, _c: & Config | o.upstream_url())]
-    #[case(Method::HEAD, missing_object(), StatusCode::TEMPORARY_REDIRECT, | o: & Task, _c: & Config | o.upstream_url())]
-    #[case(Method::GET, forbidden_object(), StatusCode::PERMANENT_REDIRECT, | o: & Task, _c: & Config | o.upstream_url())]
-    #[case(Method::HEAD, forbidden_object(), StatusCode::PERMANENT_REDIRECT, | o: & Task, _c: & Config | o.upstream_url())]
+    #[case(Method::GET, missing_object(), StatusCode::FOUND, | o: & Task, _c: & Config | o.upstream_url())]
+    #[case(Method::HEAD, missing_object(), StatusCode::FOUND, | o: & Task, _c: & Config | o.upstream_url())]
+    #[case(Method::GET, forbidden_object(), StatusCode::MOVED_PERMANENTLY, | o: & Task, _c: & Config | o.upstream_url())]
+    #[case(Method::HEAD, forbidden_object(), StatusCode::MOVED_PERMANENTLY, | o: & Task, _c: & Config | o.upstream_url())]
     #[tokio::test]
     async fn test_get_head(
         #[case] method: Method,
@@ -653,7 +653,7 @@ mod tests {
             .uri(object.root_path().as_str())
             .to_request();
         let resp = call_service(&service, req).await;
-        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(resp.status(), StatusCode::FOUND);
         assert_eq!(
             resp.headers().get("Location").unwrap().to_str().unwrap(),
             object.upstream_url().as_str()
@@ -694,7 +694,7 @@ mod tests {
             .uri(object.root_path().as_str())
             .to_request();
         let resp = call_service(&service, req).await;
-        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(resp.status(), StatusCode::FOUND);
         assert_eq!(
             resp.headers().get("Location").unwrap(),
             object.upstream_url().as_str()
