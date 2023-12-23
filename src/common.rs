@@ -284,8 +284,8 @@ pub enum Redirect {
 impl From<Redirect> for HttpResponse {
     fn from(this: Redirect) -> Self {
         let (code, location) = match this {
-            Redirect::Permanent(url) => (StatusCode::PERMANENT_REDIRECT, url),
-            Redirect::Temporary(url) => (StatusCode::TEMPORARY_REDIRECT, url),
+            Redirect::Permanent(url) => (StatusCode::MOVED_PERMANENTLY, url),
+            Redirect::Temporary(url) => (StatusCode::FOUND, url),
         };
         Self::build(code)
             .insert_header((header::LOCATION, location))
