@@ -8,11 +8,17 @@ For more information about our mirror service, refer to https://github.com/sjtug
 
 First of all, put `Rocket.toml` in the same folder as `mirror-intel`. Then,
 
-```
+```sh
 RUST_LOG=info ./mirror-intel
 ```
 
-For more advanced usage, you may refer to `mirror-intel` service defined in [mirror-docker-siyuan(https://github.com/sjtug/mirror-docker-siyuan).
+Or set environment variable `ROCKET_TOML_PATH` to the path of `Rocket.toml`.
+
+```sh
+RUST_LOG=info ROCKET_TOML_PATH=Rocket.toml ./mirror-intel
+```
+
+For more advanced usage, you may refer to `mirror-intel` service defined in [mirror-docker-siyuan](https://github.com/sjtug/mirror-docker-siyuan).
 
 After starting `mirror-intel`, it will serve on HTTP port 8000. You may set package manager with `localhost:8000` endpoint,
 and start testing.
