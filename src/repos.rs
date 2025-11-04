@@ -294,6 +294,10 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
         .route("/pypi/web/simple/{path:.+}", web::get().to(pypi))
         .route("/guix/{path:.+}", nix_intel(|c| &c.guix, "guix"))
         .route(
+            "/guix-bordeaux/{path:.+}",
+            nix_intel(|c| &c.guix_bordeaux, "guix-bordeaux"),
+        )
+        .route(
             "/nix-channels/store/{path:.+}",
             nix_intel(|c| &c.nix_channels_store, "nix-channels/store"),
         );
