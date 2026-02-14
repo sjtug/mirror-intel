@@ -8,25 +8,22 @@ version = "0.1.0"
 [dependencies]
 actix-http = "3.2"
 actix-web = { version = "4.1", features = ["macros"] }
-bytes = "1.0"
+aws-config = { version = "1.8", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1.123"
+bytes = "1.11"
 figment = { version = "0.10", features = ["toml"] }
 futures = "0.3"
 futures-util = "0.3"
 lazy_static = "1.4"
 paste = "1"
 percent-encoding = "2.1"
-pin-project = "1.0"
-prometheus = "0.13"
+prometheus = "0.14"
 regex = "1"
 reqwest = { version = "0.11", features = ["stream"] }
-rstest = "0.18"
-rusoto_core = "0.48.0"
-rusoto_s3 = "0.48.0"
+rstest = "0.26"
 serde = "1.0"
-tap = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 tokio = { version = "1.0", features = ["full"] }
-tokio-util = { version = "0.7", features = ["compat"] }
 tracing = "0.1"
 tracing-actix-web = "0.7"
 tracing-appender = "0.2"
@@ -37,5 +34,5 @@ url = "2.2"
 
 [dev-dependencies]
 tempdir = "0.3"
-httpmock = "0.6"
+httpmock = "0.8"
 figment = { version = "0.10", features = ["test"] }

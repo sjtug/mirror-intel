@@ -1,18 +1,17 @@
 //! Common types.
 
+use actix_web::body::EitherBody;
+use actix_web::http::{header, StatusCode};
+use actix_web::{HttpRequest, HttpResponse, Responder};
+use aws_sdk_s3::Client as S3Client;
+use figment::providers::{Format, Serialized, Toml};
+use figment::Figment;
+use percent_encoding::percent_decode;
+use prometheus::{proto, IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
+use reqwest::Client;
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-use actix_web::body::EitherBody;
-use actix_web::http::{StatusCode, header};
-use actix_web::{HttpRequest, HttpResponse, Responder};
-use figment::Figment;
-use figment::providers::{Format, Serialized, Toml};
-use percent_encoding::percent_decode;
-use prometheus::{IntCounter as Counter, IntGauge as Gauge, Opts, Registry, proto};
-use reqwest::Client;
-use rusoto_s3::S3Client;
-use serde::Deserialize;
 use tokio::sync::mpsc::Sender;
 use url::Url;
 
@@ -362,7 +361,7 @@ pub fn collect_config() -> Config {
     let figment = Figment::new()
         .merge(Serialized::default("address", "127.0.0.1"))
         .merge(Serialized::default("port", 8000))
-        .merge(Toml::file(&rocket_toml_path()).nested()) // For backward compatibility
+        .merge(Toml::file(rocket_toml_path()).nested()) // For backward compatibility
         .merge(Toml::file("mirror-intel.toml").nested());
     figment.extract().expect("config")
 }
@@ -371,10 +370,10 @@ pub fn collect_config() -> Config {
 mod tests {
     use figment::Jail;
 
-    use crate::Config;
     use crate::common::{
-        EndpointOverride, Endpoints, GithubReleaseConfig, S3Config, collect_config,
+        collect_config, EndpointOverride, Endpoints, GithubReleaseConfig, S3Config,
     };
+    use crate::Config;
 
     #[test]
     fn must_collect_config() {
@@ -383,7 +382,6 @@ mod tests {
         Jail::expect_with(|jail| {
             jail.create_file("mirror-intel.toml", MIRROR_INTEL_TOML)?;
             jail.create_file("Rocket.toml", ROCKET_TOML)?;
-            std::env::set_var("ROCKET_TOML_PATH", "Rocket.toml");
             let config = collect_config();
             let expected = Config {
                 address: "0.0.0.0".into(), // Default values can be overridden.
@@ -448,7 +446,6 @@ mod tests {
                 workers: None,
             };
             assert_eq!(config, expected);
-            std::env::remove_var("ROCKET_TOML_PATH");
             Ok(())
         });
     }

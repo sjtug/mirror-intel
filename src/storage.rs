@@ -1,38 +1,50 @@
 //! S3 storage backend.
 use std::time::Duration;
 
-use rusoto_core::credential::{AwsCredentials, StaticProvider};
-use rusoto_core::Region;
-use rusoto_s3::{S3Client, S3};
+use aws_config::BehaviorVersion;
+use aws_sdk_s3::config::Region;
+use aws_sdk_s3::Client as S3Client;
 use tokio::time::timeout;
 
 use crate::common::S3Config;
 use crate::error::{Error, Result};
 
-impl From<&S3Config> for Region {
-    fn from(s3_config: &S3Config) -> Self {
-        Self::Custom {
-            name: s3_config.name.clone(),
-            endpoint: s3_config.endpoint.clone(),
-        }
-    }
+fn s3_region(s3_config: &S3Config) -> Region {
+    Region::new(s3_config.name.clone())
 }
 
 /// Creates an authenticated S3 client.
 ///
 /// The default credential provider is used.
-fn get_s3_client(s3_config: &S3Config) -> S3Client {
-    S3Client::new(s3_config.into())
+async fn get_s3_client(s3_config: &S3Config) -> S3Client {
+    let shared_config = aws_config::defaults(BehaviorVersion::latest())
+        .region(s3_region(s3_config))
+        .load()
+        .await;
+
+    let mut s3_builder = aws_sdk_s3::Config::builder()
+        .region(s3_region(s3_config))
+        .endpoint_url(s3_config.endpoint.clone())
+        .behavior_version(BehaviorVersion::latest())
+        .force_path_style(true);
+
+    s3_builder.set_credentials_provider(shared_config.credentials_provider());
+
+    S3Client::from_conf(s3_builder.build())
 }
 
 /// Creates an anonymous S3 client.
 ///
 /// It works in read-only mode.
 pub fn get_anonymous_s3_client(s3_config: &S3Config) -> S3Client {
-    S3Client::new_with(
-        rusoto_core::request::HttpClient::new().expect("Failed to creat HTTP client"),
-        StaticProvider::from(AwsCredentials::default()),
-        s3_config.into(),
+    S3Client::from_conf(
+        aws_sdk_s3::Config::builder()
+            .region(s3_region(s3_config))
+            .endpoint_url(s3_config.endpoint.clone())
+            .behavior_version(BehaviorVersion::latest())
+            .force_path_style(true)
+            .allow_no_auth()
+            .build(),
     )
 }
 
@@ -42,30 +54,32 @@ pub fn get_anonymous_s3_client(s3_config: &S3Config) -> S3Client {
 pub async fn stream_to_s3(
     path: &str,
     content_length: u64,
-    stream: rusoto_s3::StreamingBody,
+    stream: aws_sdk_s3::primitives::ByteStream,
     s3_config: &S3Config,
-) -> Result<rusoto_s3::PutObjectOutput> {
-    let s3_client = get_s3_client(s3_config);
+) -> Result<aws_sdk_s3::operation::put_object::PutObjectOutput> {
+    let s3_client = get_s3_client(s3_config).await;
 
-    let req = rusoto_s3::PutObjectRequest {
-        body: Some(stream),
-        bucket: s3_config.bucket.clone(),
-        key: path.to_string(),
-        content_length: Some(content_length as i64),
-        ..Default::default()
-    };
-    Ok(s3_client.put_object(req).await?)
+    Ok(s3_client
+        .put_object()
+        .body(stream)
+        .bucket(s3_config.bucket.clone())
+        .key(path)
+        .content_length(content_length as i64)
+        .send()
+        .await?)
 }
 
 /// Check whether authenticated S3 storage is available.
 pub async fn check_s3(s3_config: &S3Config) -> Result<()> {
     timeout(Duration::from_secs(1), async move {
-        let s3_client = get_s3_client(s3_config);
-        let req = rusoto_s3::ListObjectsRequest {
-            bucket: s3_config.bucket.clone(),
-            ..Default::default()
-        };
-        s3_client.list_objects(req).await?;
+        let s3_client = get_s3_client(s3_config).await;
+
+        s3_client
+            .list_objects()
+            .bucket(s3_config.bucket.clone())
+            .send()
+            .await?;
+
         Ok::<(), Error>(())
     })
     .await

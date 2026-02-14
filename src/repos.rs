@@ -1,14 +1,13 @@
 use actix_web::http::{Method, Uri};
-use actix_web::{HttpResponse, Route, guard, web};
+use actix_web::{guard, web, HttpResponse, Route};
 use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::error::Result;
 use crate::intel_path::IntelPath;
 use crate::{
-    Error,
     common::{Config, Endpoints, IntelMission, IntelResponse, Redirect, Task},
-    utils,
+    utils, Error,
 };
 
 pub fn simple_intel(
@@ -445,17 +444,17 @@ pub async fn index(path: IntelPath, config: web::Data<Config>) -> IntelResponse 
 mod tests {
     use std::sync::Arc;
 
-    use actix_http::{Request, body};
-    use actix_web::App;
+    use actix_http::{body, Request};
     use actix_web::dev::{Service, ServiceResponse};
     use actix_web::http::StatusCode;
-    use actix_web::test::{TestRequest, call_service, init_service};
-    use figment::Figment;
+    use actix_web::test::{call_service, init_service, TestRequest};
+    use actix_web::App;
     use figment::providers::{Format, Toml};
+    use figment::Figment;
     use httpmock::MockServer;
     use reqwest::ClientBuilder;
     use rstest::rstest;
-    use tokio::sync::mpsc::{Receiver, channel};
+    use tokio::sync::mpsc::{channel, Receiver};
     use url::Url;
 
     use crate::common::EndpointOverride;
@@ -492,7 +491,7 @@ mod tests {
             .join(("s3.website_endpoint", server.base_url()))
             .join(("s3.bucket", "bucket"))
             .join(("direct_stream_size_kb", 0))
-            .merge(Toml::file(&crate::common::rocket_toml_path()).nested());
+            .merge(Toml::file(crate::common::rocket_toml_path()).nested());
         let mut config: Config = figment.extract().expect("config");
         config.read_only = true;
         let config = Arc::new(config);
@@ -609,7 +608,7 @@ mod tests {
         assert_eq!(resp.status(), expected_status);
         assert_eq!(
             resp.headers().get("Location").unwrap().to_str().unwrap(),
-            expected_location_injection(&object, &*config).as_str()
+            expected_location_injection(&object, &config).as_str()
         );
     }
 
@@ -639,7 +638,7 @@ mod tests {
         let req = TestRequest::get().uri(url).to_request();
         let resp = call_service(&service, req).await;
         let body = body::to_bytes(resp.into_body()).await.unwrap();
-        let text = std::str::from_utf8(&*body).unwrap();
+        let text = std::str::from_utf8(&body).unwrap();
         assert_f(text);
     }
 

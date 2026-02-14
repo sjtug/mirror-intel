@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use actix_web::http::header::ContentType;
 use actix_web::{web, HttpResponse};
-use rusoto_s3::S3;
 
 use crate::common::{Config, IntelMission, IntelResponse, Redirect};
 use crate::intel_path::IntelPath;
@@ -56,15 +55,15 @@ pub async fn list(
     );
     let mirror_clone_list = "mirror_clone_list.html";
 
-    // First, check if there is mirror-clone index
-    let req = rusoto_s3::GetObjectRequest {
-        bucket: config.s3.bucket.clone(),
-        key: format!("{}{}", path_slash, mirror_clone_list),
-        ..Default::default()
-    };
+    // First, check if there is mirror-clone index.
     let result = tokio::time::timeout(
         Duration::from_secs(1),
-        intel_mission.s3_client.get_object(req),
+        intel_mission
+            .s3_client
+            .get_object()
+            .bucket(config.s3.bucket.clone())
+            .key(format!("{}{}", path_slash, mirror_clone_list))
+            .send(),
     )
     .await
     .map_err(|_| Error::Timeout(()))?;
@@ -73,17 +72,17 @@ pub async fn list(
         return Ok(Redirect::Permanent(format!("{}{}", real_endpoint, mirror_clone_list)).into());
     }
 
-    // Otherwise, generate a dynamic index
-    let req = rusoto_s3::ListObjectsRequest {
-        bucket: config.s3.bucket.clone(),
-        prefix: Some(path_slash.clone()),
-        delimiter: Some("/".to_string()),
-        max_keys: Some(100),
-        ..Default::default()
-    };
+    // Otherwise, generate a dynamic index.
     let result = tokio::time::timeout(
         Duration::from_secs(5),
-        intel_mission.s3_client.list_objects(req),
+        intel_mission
+            .s3_client
+            .list_objects()
+            .bucket(config.s3.bucket.clone())
+            .prefix(path_slash.clone())
+            .delimiter("/".to_string())
+            .max_keys(100)
+            .send(),
     )
     .await
     .map_err(|_| Error::Timeout(()))??;
@@ -114,9 +113,14 @@ pub async fn list(
                         None
                     } else {
                         x.last_modified.as_ref().and_then(|last_modified| {
-                            x.size
-                                .as_ref()
-                                .map(|size| generate_url(key, last_modified, *size, &path_slash))
+                            x.size.as_ref().map(|size| {
+                                generate_url(
+                                    key,
+                                    last_modified.as_nanos().to_string().as_str(),
+                                    *size,
+                                    &path_slash,
+                                )
+                            })
                         })
                     }
                 })
