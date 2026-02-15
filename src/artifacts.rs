@@ -3,15 +3,15 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::Bytes;
 use futures_util::StreamExt;
 use reqwest::{Client, Response};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::mpsc::{unbounded_channel, Receiver, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, UnboundedSender, unbounded_channel};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tracing::{info, instrument, warn};
 use url::Url;
@@ -391,14 +391,14 @@ pub async fn download_artifacts(
 #[cfg(test)]
 mod tests {
     use httpmock::MockServer;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use tokio::fs;
 
     use super::*;
 
     #[tokio::test]
     async fn must_download_payload_to_memory() {
-        let tmp_dir = TempDir::new("intel").unwrap();
+        let tmp_dir = TempDir::with_prefix("intel").unwrap();
         let config = Config {
             buffer_path: tmp_dir.path().to_path_buf(),
             file_threshold_mb: 1,
@@ -430,7 +430,7 @@ mod tests {
 
     #[tokio::test]
     async fn must_download_payload_to_file() {
-        let tmp_dir = TempDir::new("intel").unwrap();
+        let tmp_dir = TempDir::with_prefix("intel").unwrap();
         let config = Config {
             buffer_path: tmp_dir.path().to_path_buf(),
             file_threshold_mb: 0,
@@ -468,7 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn must_reject_large_payload() {
-        let tmp_dir = TempDir::new("intel").unwrap();
+        let tmp_dir = TempDir::with_prefix("intel").unwrap();
         let config = Config {
             buffer_path: tmp_dir.path().to_path_buf(),
             file_threshold_mb: 0,

@@ -1,6 +1,6 @@
 use actix_web::body::{BodyStream, SizedStream};
 use actix_web::http::header::ContentType;
-use actix_web::http::{header, StatusCode, Uri};
+use actix_web::http::{StatusCode, Uri, header};
 use actix_web::{HttpResponse, Responder};
 use futures::stream::TryStreamExt;
 use tracing::debug;
@@ -236,7 +236,7 @@ mod tests {
     use actix_http::body::to_bytes;
     use httpmock::{Method, MockServer};
     use reqwest::Client;
-    use tokio::sync::mpsc::{channel, Receiver};
+    use tokio::sync::mpsc::{Receiver, channel};
 
     use crate::common::{IntelObject, IntelResponse, S3Config, Task};
     use crate::storage::get_anonymous_s3_client;

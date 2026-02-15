@@ -1,13 +1,14 @@
 use actix_web::http::{Method, Uri};
-use actix_web::{guard, web, HttpResponse, Route};
+use actix_web::{HttpResponse, Route, guard, web};
 use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::error::Result;
 use crate::intel_path::IntelPath;
 use crate::{
+    Error,
     common::{Config, Endpoints, IntelMission, IntelResponse, Redirect, Task},
-    utils, Error,
+    utils,
 };
 
 pub fn simple_intel(
@@ -444,17 +445,17 @@ pub async fn index(path: IntelPath, config: web::Data<Config>) -> IntelResponse 
 mod tests {
     use std::sync::Arc;
 
-    use actix_http::{body, Request};
+    use actix_http::{Request, body};
+    use actix_web::App;
     use actix_web::dev::{Service, ServiceResponse};
     use actix_web::http::StatusCode;
-    use actix_web::test::{call_service, init_service, TestRequest};
-    use actix_web::App;
-    use figment::providers::{Format, Toml};
+    use actix_web::test::{TestRequest, call_service, init_service};
     use figment::Figment;
+    use figment::providers::{Format, Toml};
     use httpmock::MockServer;
     use reqwest::ClientBuilder;
     use rstest::rstest;
-    use tokio::sync::mpsc::{channel, Receiver};
+    use tokio::sync::mpsc::{Receiver, channel};
     use url::Url;
 
     use crate::common::EndpointOverride;

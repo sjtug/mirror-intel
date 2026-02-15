@@ -95,7 +95,6 @@
             programs = {
               autocorrect.enable = true;
               nixfmt.enable = true;
-              rustfmt.enable = true;
             };
           };
 
@@ -104,20 +103,6 @@
           pre-commit.settings.package = pkgs.prek;
           pre-commit.settings.configPath = ".pre-commit-config.flake.yaml";
           pre-commit.settings.hooks = {
-            # Disable due to Nix sandbox restriction
-            /*
-              clippy = {
-                enable = true;
-                packageOverrides = {
-                  cargo = pkgs.rustToolchain;
-                  clippy = pkgs.rustToolchain;
-                };
-                settings = {
-                  allFeatures = true;
-                  denyWarnings = true;
-                };
-              };
-            */
             commitizen.enable = true;
             eclint.enable = true;
             treefmt.enable = true;

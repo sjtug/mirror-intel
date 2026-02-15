@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use actix_web::{guard, web, App, HttpServer};
+use actix_web::{App, HttpServer, guard, web};
 use prometheus::{Encoder, TextEncoder};
 use reqwest::{Client, ClientBuilder};
 use tokio::sync::mpsc::channel;
@@ -19,7 +19,7 @@ use tracing_actix_web::TracingLogger;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_log::LogTracer;
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::{fmt, EnvFilter, Registry};
+use tracing_subscriber::{EnvFilter, Registry, fmt};
 
 use artifacts::download_artifacts;
 use browse::list;
