@@ -444,6 +444,7 @@ pub async fn index(path: IntelPath, config: web::Data<Config>) -> IntelResponse 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::LazyLock;
 
     use actix_http::{Request, body};
     use actix_web::App;
@@ -455,7 +456,10 @@ mod tests {
     use httpmock::MockServer;
     use reqwest::ClientBuilder;
     use rstest::rstest;
-    use tokio::sync::mpsc::{Receiver, channel};
+    use tokio::sync::{
+        Mutex,
+        mpsc::{Receiver, channel},
+    };
     use url::Url;
 
     use crate::common::EndpointOverride;
@@ -466,6 +470,9 @@ mod tests {
     };
 
     use super::*;
+
+    // Global mutex to ensure tests using mock server run sequentially
+    static TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     async fn make_service() -> (
         impl Service<Request, Response = ServiceResponse, Error = actix_web::Error>,
@@ -492,6 +499,15 @@ mod tests {
             .join(("s3.website_endpoint", server.base_url()))
             .join(("s3.bucket", "bucket"))
             .join(("direct_stream_size_kb", 0))
+            // Required config fields with default values for tests
+            .join(("max_pending_task", 1024))
+            .join(("concurrent_download", 8))
+            .join(("user_agent", "mirror-intel-test/0.1"))
+            .join(("file_threshold_mb", 4))
+            .join(("ignore_threshold_mb", 1024))
+            .join(("base_url", "http://localhost:8000"))
+            .join(("max_retries", 3))
+            .join(("download_timeout", 3600))
             .merge(Toml::file(crate::common::rocket_toml_path()).nested());
         let mut config: Config = figment.extract().expect("config");
         config.read_only = true;
@@ -599,6 +615,8 @@ mod tests {
         #[case] expected_status: StatusCode,
         #[case] expected_location_injection: impl FnOnce(&Task, &Config) -> Url,
     ) {
+        // Acquire global lock to ensure tests run sequentially
+        let _guard = TEST_MUTEX.lock().await;
         // if an object is filtered, we should permanently redirect users to upstream
         let (service, config, _rx, _server) = make_service().await;
         let req = TestRequest::default()
@@ -635,6 +653,7 @@ mod tests {
     #[case("/pytorch-wheels?mirror_intel_list", is_index_for("pytorch-wheels"))]
     #[tokio::test]
     async fn test_index_list_page(#[case] url: &str, #[case] assert_f: impl FnOnce(&str)) {
+        let _guard = TEST_MUTEX.lock().await;
         let (service, _config, _rx, _server) = make_service().await;
         let req = TestRequest::get().uri(url).to_request();
         let resp = call_service(&service, req).await;
@@ -645,6 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_url_segment() {
+        let _guard = TEST_MUTEX.lock().await;
         // this case is to test if we could process escaped URL correctly
         let (service, _, _rx, _server) = make_service().await;
         let object = Task {
@@ -667,6 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_url_segment_fail() {
+        let _guard = TEST_MUTEX.lock().await;
         // this case is to test if we could process escaped URL correctly
         let (service, _, _rx, _server) = make_service().await;
         let object = Task {
@@ -685,6 +706,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_url_segment_query() {
+        let _guard = TEST_MUTEX.lock().await;
         // this case is to test if we could process escaped URL correctly
         let (service, _, _rx, _server) = make_service().await;
         let object = Task {
@@ -744,6 +766,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_proxy_head() {
+        let _guard = TEST_MUTEX.lock().await;
         // if an object doesn't exist in s3, we should temporarily redirect users to upstream
         let (service, _, _rx, _server) = make_service().await;
         let object = Task {

@@ -5,21 +5,27 @@
   ...
 }:
 rec {
-  src = craneLib.cleanCargoSource ../.;
+  src =
+    let
+      unfilteredRoot = ../.;
+    in
+    lib.fileset.toSource {
+      root = unfilteredRoot;
+      fileset = lib.fileset.unions [
+        (craneLib.fileset.commonCargoSources unfilteredRoot)
+        (lib.fileset.fileFilter (file: file.hasExt "toml") (unfilteredRoot + "/tests/config"))
+        (lib.fileset.maybeMissing (unfilteredRoot + "/LICENSE"))
+      ];
+    };
   commonArgs = {
     inherit src;
     strictDeps = true;
 
     nativeBuildInputs = with pkgs; [ pkg-config ];
 
-    env.OPENSSL_NO_VENDOR = 1;
-
     buildInputs = with pkgs; [ openssl ];
 
-    checkFlags = [
-      # require network
-      "--skip=repos::tests::test_get_head::case_1"
-    ];
+    env.OPENSSL_NO_VENDOR = 1;
 
     meta = {
       description = "Intelligent mirror redirector middleware for SJTUG";

@@ -1,6 +1,6 @@
 use actix_web::body::{BodyStream, SizedStream};
 use actix_web::http::header::ContentType;
-use actix_web::http::{StatusCode, Uri, header};
+use actix_web::http::{StatusCode as ActixStatusCode, Uri};
 use actix_web::{HttpResponse, Responder};
 use futures::stream::TryStreamExt;
 use tracing::debug;
@@ -115,15 +115,15 @@ impl IntelObject {
         if resp.status().is_success() {
             if let Some(content_length) = resp.content_length() {
                 if content_length <= below_size_kb * 1024 {
-                    let content_type = resp.headers().get(header::CONTENT_TYPE).cloned();
+                    // Use str key for reqwest headers
+                    let content_type = resp.headers().get("content-type").cloned();
                     let text = resp.text().await?;
                     let text = f(text);
 
                     return Ok(if let Some(content_type) = content_type {
-                        HttpResponse::Ok()
-                            .content_type(content_type)
-                            .body(text)
-                            .into()
+                        // Convert reqwest HeaderValue to actix-web compatible format
+                        let ct_str = content_type.to_str().unwrap_or("application/octet-stream");
+                        HttpResponse::Ok().content_type(ct_str).body(text).into()
                     } else {
                         HttpResponse::Ok().body(text).into()
                     });
@@ -143,15 +143,18 @@ impl IntelObject {
             }
         };
 
-        let code = upstream_resp.status().normalize();
+        // Convert reqwest StatusCode to actix-web StatusCode
+        let code = status_code_normalize(upstream_resp.status());
         let mut resp = HttpResponse::build(code);
-        if let Some(content_type) = upstream_resp.headers().get(header::CONTENT_TYPE) {
-            resp.content_type(content_type);
+        // Use string key for reqwest headers
+        if let Some(content_type) = upstream_resp.headers().get("content-type") {
+            resp.content_type(content_type.as_bytes());
         }
         let content_length = upstream_resp.content_length();
+        // In reqwest 0.13, bytes_stream() returns Stream<Item = Result<Bytes, reqwest::Error>>
         let stream = upstream_resp
             .bytes_stream()
-            .map_err(futures::io::Error::other);
+            .map_err(|e| futures::io::Error::other(e));
 
         Ok(if let Some(size) = content_length {
             resp.body(SizedStream::new(size, stream))
@@ -213,20 +216,33 @@ pub fn no_route_for(mut route: &str) -> HttpResponse {
         .body(body)
 }
 
-trait StatusCodeExt {
-    /// Deal with special case for NGINX 499.
-    fn normalize(self) -> StatusCode;
-}
-
-impl StatusCodeExt for StatusCode {
-    fn normalize(self) -> StatusCode {
-        if self.as_u16() == 499 {
-            Self::NOT_FOUND
-        } else {
-            self
-        }
+/// Convert reqwest StatusCode to actix-web StatusCode and normalize.
+/// Deals with special case for NGINX 499.
+fn status_code_normalize(code: reqwest::StatusCode) -> ActixStatusCode {
+    let code_u16 = code.as_u16();
+    if code_u16 == 499 {
+        ActixStatusCode::NOT_FOUND
+    } else {
+        // Parse from u16 to get the equivalent actix-web status code
+        ActixStatusCode::from_u16(code_u16).unwrap_or(ActixStatusCode::OK)
     }
 }
+
+// (Deprecated) old trait for any remaining actix-web StatusCode usages
+// trait StatusCodeExt {
+//     /// Deal with special case for NGINX 499.
+//     fn normalize(self) -> ActixStatusCode;
+// }
+
+// impl StatusCodeExt for ActixStatusCode {
+//     fn normalize(self) -> ActixStatusCode {
+//         if self.as_u16() == 499 {
+//             Self::NOT_FOUND
+//         } else {
+//             self
+//         }
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

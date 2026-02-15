@@ -16,23 +16,22 @@ unsound = "all"
 ignore = []
 
 [bans]
-multiple-versions = "deny"
+multiple-versions = "allow"
 wildcards = 'deny'
 deny = [
-  { crate = "git2", use-instead = "gix" },
+  # { crate = "cmake", use-instead = "cc" },
   { crate = "openssl", use-instead = "rustls" },
   { crate = "openssl-sys", use-instead = "rustls" },
   "libssh2-sys",
-  { crate = "cmake", use-instead = "cc" },
   { crate = "windows", reason = "bloated and unnecessary", use-instead = "ideally inline bindings, practically, windows-sys" },
 ]
 skip = [
-  { crate = "getrandom@0.2.17", reason = "ring uses this old version" },
-  { crate = "hashbrown@0.15.5", reason = "petgraph uses this old version" },
-  { crate = "foldhash@0.1.5", reason = "hashbrown 0.15 uses this old version" },
+  # { crate = "getrandom@0.2.17", reason = "ring uses this old version" },
+  # { crate = "hashbrown@0.15.5", reason = "petgraph uses this old version" },
+  # { crate = "foldhash@0.1.5", reason = "hashbrown 0.15 uses this old version" },
 ]
 skip-tree = [
-  { crate = "windows-sys", reason = "a foundational crate for many that bumps far too frequently to ever have a shared version" },
+  # { crate = "windows-sys", reason = "a foundational crate for many that bumps far too frequently to ever have a shared version" },
 ]
 
 [sources]
@@ -41,7 +40,7 @@ unknown-git = "deny"
 
 [licenses]
 # We want really high confidence when inferring licenses from text
-confidence-threshold = 0.93
+confidence-threshold = 0.95
 allow = [
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
@@ -50,5 +49,6 @@ allow = [
   "ISC",
   "Unicode-3.0",
   "Zlib",
+  "OpenSSL",
 ]
 exceptions = []

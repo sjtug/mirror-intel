@@ -1,9 +1,8 @@
 //! S3 storage backend.
 use std::time::Duration;
 
-use aws_config::BehaviorVersion;
 use aws_sdk_s3::Client as S3Client;
-use aws_sdk_s3::config::Region;
+use aws_sdk_s3::config::{BehaviorVersion, Region};
 use tokio::time::timeout;
 
 use crate::common::S3Config;
@@ -17,20 +16,14 @@ fn s3_region(s3_config: &S3Config) -> Region {
 ///
 /// The default credential provider is used.
 async fn get_s3_client(s3_config: &S3Config) -> S3Client {
-    let shared_config = aws_config::defaults(BehaviorVersion::latest())
-        .region(s3_region(s3_config))
-        .load()
-        .await;
-
-    let mut s3_builder = aws_sdk_s3::Config::builder()
+    let conf = aws_sdk_s3::Config::builder()
         .region(s3_region(s3_config))
         .endpoint_url(s3_config.endpoint.clone())
         .behavior_version(BehaviorVersion::latest())
-        .force_path_style(true);
+        .force_path_style(true)
+        .build();
 
-    s3_builder.set_credentials_provider(shared_config.credentials_provider());
-
-    S3Client::from_conf(s3_builder.build())
+    S3Client::from_conf(conf)
 }
 
 /// Creates an anonymous S3 client.
