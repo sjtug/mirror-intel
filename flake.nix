@@ -182,30 +182,20 @@
               echo 1>&2 "Welcome to the development shell!"
             '';
 
-            packages =
-              with pkgs;
-              [
-                ### Rust toolchain ###
-                rustToolchain
-                openssl
-                pkg-config
-                # rustPlatform.bindgenHook
+            nativeBuildInputs = with pkgs; [
+              ### Rust toolchain ###
+              rustToolchain
+              # rustPlatform.bindgenHook
 
-                ### Miscellaneous ###
-                # cargo-audit
-                # cargo-bloat
-                # cargo-license
-                # cargo-nextest
-                # cargo-outdated
-                # cargo-show-asm
-                # samply
-                # watchexec
-                # bacon
-              ]
-              ++ lib.optionals (!pkgs.stdenv.isDarwin) [
-                # cargo-llvm-cov
-                # valgrind
-              ];
+              ### Miscellaneous ###
+              # valgrind
+              # cargo-bloat
+              # cargo-outdated
+              # cargo-show-asm
+              # samply
+              # watchexec
+              # bacon
+            ];
           };
 
           packages.default = my-crate;

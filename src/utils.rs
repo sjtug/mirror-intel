@@ -112,23 +112,22 @@ impl IntelObject {
         let upstream = task.upstream_url();
         let resp = intel_mission.client.get(upstream).send().await?;
 
-        if resp.status().is_success() {
-            if let Some(content_length) = resp.content_length() {
-                if content_length <= below_size_kb * 1024 {
-                    // Use str key for reqwest headers
-                    let content_type = resp.headers().get("content-type").cloned();
-                    let text = resp.text().await?;
-                    let text = f(text);
+        if resp.status().is_success()
+            && let Some(content_length) = resp.content_length()
+            && content_length <= below_size_kb * 1024
+        {
+            // Use str key for reqwest headers
+            let content_type = resp.headers().get("content-type").cloned();
+            let text = resp.text().await?;
+            let text = f(text);
 
-                    return Ok(if let Some(content_type) = content_type {
-                        // Convert reqwest HeaderValue to actix-web compatible format
-                        let ct_str = content_type.to_str().unwrap_or("application/octet-stream");
-                        HttpResponse::Ok().content_type(ct_str).body(text).into()
-                    } else {
-                        HttpResponse::Ok().body(text).into()
-                    });
-                }
-            }
+            return Ok(if let Some(content_type) = content_type {
+                // Convert reqwest HeaderValue to actix-web compatible format
+                let ct_str = content_type.to_str().unwrap_or("application/octet-stream");
+                HttpResponse::Ok().content_type(ct_str).body(text).into()
+            } else {
+                HttpResponse::Ok().body(text).into()
+            });
         }
 
         Ok(self.redirect(config).into())
@@ -154,7 +153,7 @@ impl IntelObject {
         // In reqwest 0.13, bytes_stream() returns Stream<Item = Result<Bytes, reqwest::Error>>
         let stream = upstream_resp
             .bytes_stream()
-            .map_err(|e| futures::io::Error::other(e));
+            .map_err(futures::io::Error::other);
 
         Ok(if let Some(size) = content_length {
             resp.body(SizedStream::new(size, stream))
@@ -172,11 +171,11 @@ impl IntelObject {
     ) -> Result<IntelResponse> {
         match &self {
             Self::Cached { resp, .. } => {
-                if let Some(content_length) = resp.content_length() {
-                    if content_length <= size_kb * 1024 {
-                        debug!("{} <= {}, direct stream", content_length, size_kb * 1024);
-                        return Ok(self.reverse_proxy(intel_mission).await?.into());
-                    }
+                if let Some(content_length) = resp.content_length()
+                    && content_length <= size_kb * 1024
+                {
+                    debug!("{} <= {}, direct stream", content_length, size_kb * 1024);
+                    return Ok(self.reverse_proxy(intel_mission).await?.into());
                 }
                 Ok(self.redirect(config).into())
             }

@@ -21,9 +21,13 @@ rec {
     inherit src;
     strictDeps = true;
 
-    nativeBuildInputs = with pkgs; [ pkg-config ];
+    nativeBuildInputs = [ ];
 
-    buildInputs = with pkgs; [ openssl ];
+    buildInputs = [ ];
+
+    nativeCheckInputs = [ pkgs.cacert ]; # required for tests
+
+    doCheck = false; # Run with cargo-nextest instead
 
     env.OPENSSL_NO_VENDOR = 1;
 

@@ -104,14 +104,14 @@ async fn main() {
 
     info!("checking if bucket is available...");
     // check if credentials are set and we have permissions
-    if !config.read_only {
-        if let Err(error) = check_s3(&config.s3).await {
-            warn!(
-                ?error,
-                "s3 storage backend not available, but not running in read-only mode"
-            );
-            // config.read_only = true;
-        }
+    if !config.read_only
+        && let Err(error) = check_s3(&config.s3).await
+    {
+        warn!(
+            ?error,
+            "s3 storage backend not available, but not running in read-only mode"
+        );
+        // config.read_only = true;
     }
 
     info!(?config, "config loaded");

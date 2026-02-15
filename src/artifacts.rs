@@ -56,10 +56,10 @@ fn next_buffer_path(config: &Config) -> PathBuf {
 
 /// Remove a temporary file, ignoring not-found errors.
 async fn remove_buffer_file(path: &Path) {
-    if let Err(err) = fs::remove_file(path).await {
-        if err.kind() != std::io::ErrorKind::NotFound {
-            warn!(error=?err, path=%path.display(), "failed to remove cache file");
-        }
+    if let Err(err) = fs::remove_file(path).await
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(error=?err, path=%path.display(), "failed to remove cache file");
     }
 }
 
