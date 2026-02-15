@@ -151,7 +151,7 @@ impl IntelObject {
         let content_length = upstream_resp.content_length();
         let stream = upstream_resp
             .bytes_stream()
-            .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e));
+            .map_err(futures::io::Error::other);
 
         Ok(if let Some(size) = content_length {
             resp.body(SizedStream::new(size, stream))
@@ -394,7 +394,7 @@ mod tests {
                 IntelResponse::Redirect(_) => panic!("must be response"),
                 IntelResponse::Response(resp) => {
                     let body = to_bytes(resp.into_body()).await.unwrap();
-                    let text = std::str::from_utf8(&*body).unwrap();
+                    let text = std::str::from_utf8(&body).unwrap();
                     assert_eq!(text, "lorem lorem", "must be rewritten");
                 }
             }

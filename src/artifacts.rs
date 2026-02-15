@@ -3,22 +3,16 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
-use bytes::{Bytes, BytesMut};
-use futures::{Stream, TryStreamExt};
+use bytes::Bytes;
 use futures_util::StreamExt;
-use pin_project::pin_project;
 use reqwest::{Client, Response};
-use tap::Pipe;
-use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::fs::{self, OpenOptions};
+use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::mpsc::{unbounded_channel, Receiver, UnboundedSender};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
-use tokio_util::codec;
 use tracing::{info, instrument, warn};
 use url::Url;
 
@@ -26,121 +20,105 @@ use crate::common::{Config, Metrics, Task};
 use crate::error::{Error, Result};
 use crate::storage::stream_to_s3;
 
-type IOResult = std::result::Result<Bytes, std::io::Error>;
+const BYTES_PER_MB: u64 = 1024 * 1024;
 
-/// Convert reqwest resp stream to io result stream.
-fn into_io_stream(
-    stream: impl Stream<Item = reqwest::Result<Bytes>>,
-) -> impl Stream<Item = IOResult> {
-    stream.map(move |x| {
-        x.map_err(|err| {
-            warn!(error=?err, "failed to receive data");
-            std::io::Error::new(std::io::ErrorKind::Other, err)
-        })
-    })
+/// Downloaded upstream payload.
+enum UploadPayload {
+    Memory(Bytes),
+    File { path: PathBuf, content_length: u64 },
+}
+
+impl UploadPayload {
+    fn content_length(&self) -> u64 {
+        match self {
+            Self::Memory(bytes) => bytes.len() as u64,
+            Self::File { content_length, .. } => *content_length,
+        }
+    }
 }
 
 /// Global unique file id counter.
 static FILE_ID: AtomicUsize = AtomicUsize::new(0);
 
-/// An async file wrapper that can be used as a file-backed stream buffer.
-struct FileWrapper {
-    path: PathBuf,
-    f: Option<BufWriter<File>>,
+fn max_download_size(config: &Config) -> u64 {
+    config.ignore_threshold_mb.saturating_mul(BYTES_PER_MB)
 }
 
-impl AsMut<BufWriter<File>> for FileWrapper {
-    fn as_mut(&mut self) -> &mut BufWriter<File> {
-        self.f.as_mut().unwrap()
-    }
+fn file_threshold(config: &Config) -> u64 {
+    config.file_threshold_mb.saturating_mul(BYTES_PER_MB)
 }
 
-impl AsRef<BufWriter<File>> for FileWrapper {
-    fn as_ref(&self) -> &BufWriter<File> {
-        self.f.as_ref().unwrap()
-    }
+fn next_buffer_path(config: &Config) -> PathBuf {
+    config
+        .buffer_path
+        .join(FILE_ID.fetch_add(1, Ordering::SeqCst).to_string())
 }
 
-impl FileWrapper {
-    /// Create a new file at the given path.
-    ///
-    /// Existing files are truncated.
-    async fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Ok(Self {
-            path: path.as_ref().to_path_buf(),
-            f: Some(BufWriter::new(
-                OpenOptions::default()
-                    .create(true)
-                    .truncate(true)
-                    .write(true)
-                    .read(true)
-                    .open(path)
-                    .await?,
-            )),
-        })
-    }
-
-    /// Convert this file into a stream of bytes.
-    async fn into_bytes_stream(mut self) -> Result<impl Stream<Item = IOResult>> {
-        // remove file on disk, but we could still read it
-        let mut f = self.f.take().unwrap();
-        f.flush().await?;
-        let mut f = f.into_inner();
-        if let Err(err) = fs::remove_file(&self.path).await {
-            warn!(error=?err, path=%self.path.display(), "failed to remove cache file");
-        }
-        f.seek(std::io::SeekFrom::Start(0)).await?;
-        Ok(
-            codec::FramedRead::new(BufReader::new(f), codec::BytesCodec::new())
-                .map_ok(BytesMut::freeze),
-        )
-    }
-}
-
-impl Drop for FileWrapper {
-    fn drop(&mut self) {
-        if let Some(f) = self.f.take() {
-            drop(f);
-            std::fs::remove_file(&self.path).ok();
+/// Remove a temporary file, ignoring not-found errors.
+async fn remove_buffer_file(path: &Path) {
+    if let Err(err) = fs::remove_file(path).await {
+        if err.kind() != std::io::ErrorKind::NotFound {
+            warn!(error=?err, path=%path.display(), "failed to remove cache file");
         }
     }
 }
 
-/// Convert a stream of bytes to a file-backed one.
-///
-/// The old stream is consumed and a new stream with the same contents is returned.
-/// It can be used to download large files from the network.
-async fn into_file_stream(
-    mut stream: impl Stream<Item = IOResult> + Unpin,
+/// Download response body into memory.
+async fn download_to_memory(response: Response, max_size: u64) -> Result<UploadPayload> {
+    let body = response.bytes().await?;
+    if body.len() as u64 > max_size {
+        return Err(Error::TooLarge(()));
+    }
+    Ok(UploadPayload::Memory(body))
+}
+
+/// Download response body into a temporary file.
+async fn download_to_file(
+    response: Response,
     config: &Config,
-) -> Result<impl Stream<Item = IOResult>> {
-    let path = config.buffer_path.join(
-        FILE_ID
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            .to_string(),
+    max_size: u64,
+) -> Result<UploadPayload> {
+    let path = next_buffer_path(config);
+    let mut file = BufWriter::new(
+        OpenOptions::default()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .await?,
     );
-    let mut file = FileWrapper::open(&path).await?;
-    while let Some(v) = stream.next().await {
-        let v = v?;
-        file.as_mut().write_all(&v).await?;
-    }
-    file.into_bytes_stream().await
-}
 
-/// Convert a stream of bytes to a memory-backed one.
-///
-/// The old stream is consumed and a new stream with the same contents is returned.
-/// It can be used to download small files from the network.
-async fn into_memory_stream(
-    content_length: usize,
-    mut stream: impl Stream<Item = IOResult> + Unpin,
-) -> Result<impl Stream<Item = IOResult>> {
-    let mut result = Vec::with_capacity(content_length);
-    while let Some(v) = stream.next().await {
-        let v = v?;
-        result.extend_from_slice(&v);
+    let result = async {
+        let mut stream = response.bytes_stream();
+        let mut content_length = 0_u64;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|err| {
+                warn!(error=?err, "failed to receive data");
+                Error::Reqwest(err)
+            })?;
+            content_length += chunk.len() as u64;
+            if content_length > max_size {
+                return Err(Error::TooLarge(()));
+            }
+            file.write_all(&chunk).await?;
+        }
+
+        file.flush().await?;
+        Ok(content_length)
     }
-    Ok(futures::stream::iter(vec![Ok(Bytes::from(result))]))
+    .await;
+
+    match result {
+        Ok(content_length) => Ok(UploadPayload::File {
+            path,
+            content_length,
+        }),
+        Err(err) => {
+            remove_buffer_file(&path).await;
+            Err(err)
+        }
+    }
 }
 
 /// Download context for a single artifact.
@@ -299,90 +277,75 @@ async fn cache_task(task: Task, client: Client, config: &Config) -> Result<()> {
         info!("already exists");
         return Ok(());
     }
-    let (content_length, stream) = stream_from_url(client, task.upstream_url(), config).await?;
+
+    let payload = download_payload(&client, task.upstream_url(), config).await?;
+    let content_length = payload.content_length();
     info!(content_length, "get length");
+
     let key = task.s3_key()?;
-    let result = stream_to_s3(
-        &key,
-        content_length,
-        rusoto_s3::StreamingBody::new(stream),
-        &config.s3,
-    )
-    .await?;
+
+    let result = match payload {
+        UploadPayload::Memory(body) => {
+            stream_to_s3(
+                &key,
+                content_length,
+                aws_sdk_s3::primitives::ByteStream::from(body),
+                &config.s3,
+            )
+            .await?
+        }
+        UploadPayload::File {
+            path,
+            content_length,
+        } => {
+            let stream = match aws_sdk_s3::primitives::ByteStream::from_path(&path).await {
+                Ok(stream) => stream,
+                Err(err) => {
+                    remove_buffer_file(&path).await;
+                    return Err(Error::CustomError(format!(
+                        "failed to open buffered artifact {}: {:?}",
+                        path.display(),
+                        err
+                    )));
+                }
+            };
+
+            let upload = stream_to_s3(&key, content_length, stream, &config.s3).await;
+            remove_buffer_file(&path).await;
+            upload?
+        }
+    };
+
     info!(?result, "upload to bucket");
     Ok(())
 }
 
-#[pin_project(project = EitherProj)]
-enum Either<T, U> {
-    Left(#[pin] T),
-    Right(#[pin] U),
-}
-
-impl<O, T, U> Stream for Either<T, U>
-where
-    T: Stream<Item = O>,
-    U: Stream<Item = O>,
-{
-    type Item = O;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.project() {
-            EitherProj::Left(left) => left.poll_next(cx),
-            EitherProj::Right(right) => right.poll_next(cx),
-        }
-    }
-}
-
-/// Convert this response into a byte stream.
-///
-/// Backing buffer type is chosen based on the content length.
-async fn into_stream(
-    resp: Response,
-    config: &Config,
-) -> Result<(u64, impl Stream<Item = IOResult> + Send + Sync)> {
-    if let Some(content_length) = resp.content_length() {
-        if content_length > config.ignore_threshold_mb * 1024 * 1024 {
-            Err(Error::TooLarge(()))
-        } else {
-            let io_stream = resp.bytes_stream().pipe(into_io_stream);
-            if content_length > config.file_threshold_mb * 1024 * 1024 {
-                info!("stream mode: file backend");
-                let stream = io_stream.pipe(|s| into_file_stream(s, config)).await?;
-                Ok((content_length, Either::Left(Either::Left(stream))))
-            } else if content_length > 1024 * 1024 {
-                info!("stream mode: memory cache");
-                let stream = io_stream
-                    .pipe(|s| into_memory_stream(content_length as usize, s))
-                    .await?;
-                Ok((content_length, Either::Left(Either::Right(stream))))
-            } else {
-                info!("stream mode: direct copy");
-                Ok((content_length, Either::Right(Either::Left(io_stream))))
-            }
-        }
-    } else {
-        info!("stream mode: direct copy");
-        let resp = resp.bytes().await?;
-        Ok((
-            resp.len() as u64,
-            Either::Right(Either::Right(futures::stream::iter(vec![resp]).map(Ok))),
-        ))
-    }
-}
-
-/// Download a stream of bytes from the given url.
-async fn stream_from_url(
-    client: Client,
-    url: Url,
-    config: &Config,
-) -> Result<(u64, impl Stream<Item = IOResult> + Send + Sync)> {
+/// Download payload from URL, choosing either in-memory or file-backed buffering.
+async fn download_payload(client: &Client, url: Url, config: &Config) -> Result<UploadPayload> {
     let response = client.get(url).send().await?;
     let status = response.status();
     if !status.is_success() {
         return Err(Error::HTTPError(status));
     }
-    into_stream(response, config).await
+
+    let max_size = max_download_size(config);
+    let file_threshold = file_threshold(config);
+
+    match response.content_length() {
+        Some(content_length) if content_length > max_size => Err(Error::TooLarge(())),
+        Some(content_length) if content_length > file_threshold => {
+            info!("stream mode: file backend");
+            download_to_file(response, config, max_size).await
+        }
+        Some(_) => {
+            info!("stream mode: memory buffer");
+            download_to_memory(response, max_size).await
+        }
+        None => {
+            info!("stream mode: file backend (unknown size)");
+            download_to_file(response, config, max_size).await
+        }
+    }
 }
 
 /// Main artifact download task.
@@ -427,68 +390,14 @@ pub async fn download_artifacts(
 
 #[cfg(test)]
 mod tests {
-    use futures_util::stream;
-    use futures_util::stream::StreamExt;
     use httpmock::MockServer;
     use tempdir::TempDir;
+    use tokio::fs;
 
     use super::*;
 
     #[tokio::test]
-    async fn test_overlay_file_create() {
-        let tmp_dir = TempDir::new("intel").unwrap();
-        let path = tmp_dir.path().join("test.bin");
-        let mut wrapper = FileWrapper::open(&path).await.unwrap();
-        wrapper.as_mut().write_all(b"233333333").await.unwrap();
-        let mut stream = wrapper.into_bytes_stream().await.unwrap();
-        assert_eq!(&stream.next().await.unwrap().unwrap(), "233333333");
-    }
-
-    #[tokio::test]
-    async fn must_into_file_stream() {
-        let tmp_dir = TempDir::new("intel").unwrap();
-        let config = Config {
-            buffer_path: tmp_dir.path().to_path_buf(),
-            ..Default::default()
-        };
-
-        let data = [
-            Ok(Bytes::from_static(b"233333333")),
-            Ok(Bytes::from_static(b"666666666")),
-        ];
-
-        let stream = stream::iter(data);
-        let file_stream = into_file_stream(stream, &config).await.unwrap();
-
-        // Chunking is not guaranteed to be preserved.
-        let expected = b"233333333666666666";
-        let output = file_stream
-            .fold(Vec::new(), |mut acc, b| async move {
-                acc.extend_from_slice(&b.unwrap());
-                acc
-            })
-            .await;
-        assert_eq!(output, expected);
-    }
-
-    #[tokio::test]
-    async fn must_into_memory_stream() {
-        let data = [
-            Ok(Bytes::from_static(b"233333333")),
-            Ok(Bytes::from_static(b"666666666")),
-        ];
-
-        let stream = stream::iter(data);
-        let file_stream = into_memory_stream(100, stream).await.unwrap();
-
-        // A single chunk is returned.
-        let expected = vec![Bytes::from_static(b"233333333666666666")];
-        let output: Vec<_> = file_stream.map(|b| b.unwrap()).collect().await;
-        assert_eq!(output, expected);
-    }
-
-    #[tokio::test]
-    async fn must_from_url() {
+    async fn must_download_payload_to_memory() {
         let tmp_dir = TempDir::new("intel").unwrap();
         let config = Config {
             buffer_path: tmp_dir.path().to_path_buf(),
@@ -503,20 +412,82 @@ mod tests {
             then.status(200).body(b"23333333366666666");
         });
 
-        let (length, stream) = stream_from_url(
-            Client::new(),
+        let payload = download_payload(
+            &Client::new(),
             server.url("/test.bin").parse().unwrap(),
             &config,
         )
         .await
         .unwrap();
-        assert_eq!(length, 17);
-        let data = stream
-            .fold(Vec::new(), |mut acc, b| async move {
-                acc.extend_from_slice(&b.unwrap());
-                acc
-            })
-            .await;
-        assert_eq!(data, b"23333333366666666");
+
+        match payload {
+            UploadPayload::Memory(data) => {
+                assert_eq!(data, Bytes::from_static(b"23333333366666666"));
+            }
+            UploadPayload::File { .. } => panic!("must be memory-backed"),
+        }
+    }
+
+    #[tokio::test]
+    async fn must_download_payload_to_file() {
+        let tmp_dir = TempDir::new("intel").unwrap();
+        let config = Config {
+            buffer_path: tmp_dir.path().to_path_buf(),
+            file_threshold_mb: 0,
+            ignore_threshold_mb: 1,
+            ..Default::default()
+        };
+
+        let server = MockServer::start_async().await;
+        let _mock = server.mock(|when, then| {
+            when.path("/test.bin");
+            then.status(200).body(b"23333333366666666");
+        });
+
+        let payload = download_payload(
+            &Client::new(),
+            server.url("/test.bin").parse().unwrap(),
+            &config,
+        )
+        .await
+        .unwrap();
+
+        match payload {
+            UploadPayload::Memory(_) => panic!("must be file-backed"),
+            UploadPayload::File {
+                path,
+                content_length,
+            } => {
+                assert_eq!(content_length, 17);
+                let data = fs::read(&path).await.unwrap();
+                assert_eq!(data, b"23333333366666666");
+                remove_buffer_file(&path).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn must_reject_large_payload() {
+        let tmp_dir = TempDir::new("intel").unwrap();
+        let config = Config {
+            buffer_path: tmp_dir.path().to_path_buf(),
+            file_threshold_mb: 0,
+            ignore_threshold_mb: 0,
+            ..Default::default()
+        };
+
+        let server = MockServer::start_async().await;
+        let _mock = server.mock(|when, then| {
+            when.path("/test.bin");
+            then.status(200).body(b"1");
+        });
+
+        let result = download_payload(
+            &Client::new(),
+            server.url("/test.bin").parse().unwrap(),
+            &config,
+        )
+        .await;
+        assert!(matches!(result, Err(Error::TooLarge(()))));
     }
 }

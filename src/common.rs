@@ -1,18 +1,17 @@
 //! Common types.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use actix_web::body::EitherBody;
 use actix_web::http::{header, StatusCode};
 use actix_web::{HttpRequest, HttpResponse, Responder};
+use aws_sdk_s3::Client as S3Client;
 use figment::providers::{Format, Serialized, Toml};
 use figment::Figment;
 use percent_encoding::percent_decode;
 use prometheus::{proto, IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
 use reqwest::Client;
-use rusoto_s3::S3Client;
 use serde::Deserialize;
+use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use url::Url;
 
@@ -353,11 +352,16 @@ pub enum IntelObject {
     Origin { task: Task },
 }
 
+// new helper to read Rocket.toml path from env for backward compatibility
+pub fn rocket_toml_path() -> String {
+    std::env::var("ROCKET_TOML_PATH").unwrap_or_else(|_| "Rocket.toml".to_string())
+}
+
 pub fn collect_config() -> Config {
     let figment = Figment::new()
         .merge(Serialized::default("address", "127.0.0.1"))
         .merge(Serialized::default("port", 8000))
-        .merge(Toml::file("Rocket.toml").nested()) // For backward compatibility
+        .merge(Toml::file(rocket_toml_path()).nested()) // For backward compatibility
         .merge(Toml::file("mirror-intel.toml").nested());
     figment.extract().expect("config")
 }

@@ -491,7 +491,7 @@ mod tests {
             .join(("s3.website_endpoint", server.base_url()))
             .join(("s3.bucket", "bucket"))
             .join(("direct_stream_size_kb", 0))
-            .merge(Toml::file("Rocket.toml").nested());
+            .merge(Toml::file(crate::common::rocket_toml_path()).nested());
         let mut config: Config = figment.extract().expect("config");
         config.read_only = true;
         let config = Arc::new(config);
@@ -608,7 +608,7 @@ mod tests {
         assert_eq!(resp.status(), expected_status);
         assert_eq!(
             resp.headers().get("Location").unwrap().to_str().unwrap(),
-            expected_location_injection(&object, &*config).as_str()
+            expected_location_injection(&object, &config).as_str()
         );
     }
 
@@ -638,7 +638,7 @@ mod tests {
         let req = TestRequest::get().uri(url).to_request();
         let resp = call_service(&service, req).await;
         let body = body::to_bytes(resp.into_body()).await.unwrap();
-        let text = std::str::from_utf8(&*body).unwrap();
+        let text = std::str::from_utf8(&body).unwrap();
         assert_f(text);
     }
 

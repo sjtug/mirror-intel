@@ -49,21 +49,22 @@ fn setup_log() -> impl Drop {
         .unwrap_or_default()
         .to_lowercase();
 
-    let (json, after) =
-        match (rust_log_format.as_str(), cfg!(debug_assertions)) {
-            ("plain", _) => (false, None),
-            ("json", _) => (true, None),
-            ("", dev) => (!dev, None), // release defaults to json and debug to plain
-            (format, dev) => (
-                !dev,
-                Some(move || {
-                    warn!(
-                "RUST_LOG_FORMAT is set to '{}', but mirror-intel is in {} mode. Using '{}'",
-                format, if dev {"debug"} else {"release"}, if dev { "plain" } else { "json" }
-            );
-                }),
-            ),
-        };
+    let (json, after) = match (rust_log_format.as_str(), cfg!(debug_assertions)) {
+        ("plain", _) => (false, None),
+        ("json", _) => (true, None),
+        ("", dev) => (!dev, None), // release defaults to json and debug to plain
+        (format, dev) => (
+            !dev,
+            Some(move || {
+                warn!(
+                    "RUST_LOG_FORMAT is set to '{}', but mirror-intel is in {} mode. Using '{}'",
+                    format,
+                    if dev { "debug" } else { "release" },
+                    if dev { "plain" } else { "json" }
+                );
+            }),
+        ),
+    };
 
     if json {
         tracing::subscriber::set_global_default(registry.with(JsonStorageLayer).with(
