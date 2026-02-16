@@ -29,8 +29,6 @@ rec {
 
     doCheck = false; # Run with cargo-nextest instead
 
-    env.OPENSSL_NO_VENDOR = 1;
-
     meta = {
       description = "Intelligent mirror redirector middleware for SJTUG";
       homepage = "https://github.com/sjtug/mirror-intel";
