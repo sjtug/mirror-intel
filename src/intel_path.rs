@@ -3,7 +3,7 @@ use std::ops::Deref;
 
 use actix_http::{Payload, StatusCode};
 use actix_web::{FromRequest, HttpRequest, ResponseError};
-use futures_util::future::{ready, Ready};
+use futures_util::future::{Ready, ready};
 use thiserror::Error;
 
 /// `IntelPath` represents a URL-encoded path which is safe to use both

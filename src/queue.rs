@@ -1,19 +1,20 @@
-use std::future::Future;
-
-use actix_web::body::BoxBody;
+use actix_web::body::MessageBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse};
-use actix_web::http::header::HeaderName;
 use actix_web::http::Method;
+use actix_web::http::header::HeaderName;
 use actix_web::web;
+use futures_util::future::LocalBoxFuture;
 
 use crate::IntelMission;
 
-pub fn queue_length<S>(
+pub fn queue_length<S, B>(
     req: ServiceRequest,
     srv: &S,
-) -> impl Future<Output = Result<ServiceResponse, actix_web::Error>>
+) -> LocalBoxFuture<'static, Result<ServiceResponse<B>, actix_web::Error>>
 where
-    S: Service<ServiceRequest, Response = ServiceResponse<BoxBody>, Error = actix_web::Error>,
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
+    S::Future: 'static,
+    B: MessageBody + 'static,
 {
     let length = (req.method() == Method::GET).then(|| {
         let mission = req
@@ -23,19 +24,18 @@ where
         mission.metrics.task_in_queue.get()
     });
     let fut = srv.call(req);
-    async move {
-        let mut resp: ServiceResponse<_> = fut.await?;
+
+    Box::pin(async move {
+        let mut resp = fut.await?;
         if let Some(length) = length {
             // Rewrite the response to return the current counts.
             resp.headers_mut().append(
                 HeaderName::from_static("x-intel-queue-length"),
                 length.into(),
             );
-            return Ok(resp);
         }
-
         Ok(resp)
-    }
+    })
 }
 
 #[cfg(test)]
@@ -44,13 +44,13 @@ mod tests {
 
     use actix_http::Request;
     use actix_web::dev::{Service, ServiceResponse};
-    use actix_web::test::{call_service, init_service, TestRequest};
-    use actix_web::{web, App};
+    use actix_web::test::{TestRequest, call_service, init_service};
+    use actix_web::{App, web};
     use reqwest::Client;
 
     use crate::common::S3Config;
     use crate::storage::get_anonymous_s3_client;
-    use crate::{queue_length, IntelMission, Metrics};
+    use crate::{IntelMission, Metrics, queue_length};
 
     async fn make_service(
         metrics: Arc<Metrics>,

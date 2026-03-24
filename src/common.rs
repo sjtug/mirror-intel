@@ -1,13 +1,13 @@
 //! Common types.
 
 use actix_web::body::EitherBody;
-use actix_web::http::{header, StatusCode};
+use actix_web::http::{StatusCode, header};
 use actix_web::{HttpRequest, HttpResponse, Responder};
 use aws_sdk_s3::Client as S3Client;
-use figment::providers::{Format, Serialized, Toml};
 use figment::Figment;
+use figment::providers::{Format, Serialized, Toml};
 use percent_encoding::percent_decode;
-use prometheus::{proto, IntCounter as Counter, IntGauge as Gauge, Opts, Registry};
+use prometheus::{IntCounter as Counter, IntGauge as Gauge, Opts, Registry, proto};
 use reqwest::Client;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -373,10 +373,10 @@ mod tests {
     use figment::Jail;
     use serial_test::serial;
 
-    use crate::common::{
-        collect_config, EndpointOverride, Endpoints, GithubReleaseConfig, S3Config,
-    };
     use crate::Config;
+    use crate::common::{
+        EndpointOverride, Endpoints, GithubReleaseConfig, S3Config, collect_config,
+    };
 
     #[allow(clippy::result_large_err)]
     #[test]

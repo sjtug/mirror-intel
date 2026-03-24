@@ -1,6 +1,6 @@
 [package]
 authors = ["Alex Chi <iskyzh@gmail.com>"]
-edition = "2018"
+edition = "2024"
 name = "mirror-intel"
 license = "Apache-2.0"
 version = "0.1.0"
@@ -22,7 +22,7 @@ prometheus = "0.14"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
 rstest = "0.26"
-serde = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
