@@ -450,10 +450,12 @@ mod tests {
     use actix_web::test::{call_service, init_service, TestRequest};
     use actix_web::App;
     use figment::providers::{Format, Toml};
+    use figment::util::map;
     use figment::Figment;
     use httpmock::MockServer;
     use reqwest::ClientBuilder;
     use rstest::rstest;
+    use serial_test::serial;
     use tokio::sync::mpsc::{channel, Receiver};
     use url::Url;
 
@@ -488,6 +490,14 @@ mod tests {
         let figment = Figment::new()
             .join(("address", "127.0.0.1"))
             .join(("port", 8000))
+            .join(("concurrent_download", 512))
+            .join(("max_pending_task", 16384))
+            .join((
+                "endpoints",
+                map!["sjtug_internal" => "https://github.com/sjtug"],
+            ))
+            .join(("s3.name", "Placeholder S3"))
+            .join(("s3.endpoint", server.base_url()))
             .join(("s3.website_endpoint", server.base_url()))
             .join(("s3.bucket", "bucket"))
             .join(("direct_stream_size_kb", 0))
@@ -591,6 +601,7 @@ mod tests {
     #[case(Method::HEAD, missing_object(), StatusCode::FOUND, | o: & Task, _c: & Config | o.upstream_url())]
     #[case(Method::GET, forbidden_object(), StatusCode::MOVED_PERMANENTLY, | o: & Task, _c: & Config | o.upstream_url())]
     #[case(Method::HEAD, forbidden_object(), StatusCode::MOVED_PERMANENTLY, | o: & Task, _c: & Config | o.upstream_url())]
+    #[serial(cwd_env)]
     #[tokio::test]
     async fn test_get_head(
         #[case] method: Method,
@@ -632,6 +643,7 @@ mod tests {
     #[case("/pytorch-wheels", is_no_route_for("pytorch-wheels"))]
     #[case("/pytorch-wheels/?mirror_intel_list", is_index_for("pytorch-wheels"))]
     #[case("/pytorch-wheels?mirror_intel_list", is_index_for("pytorch-wheels"))]
+    #[serial(cwd_env)]
     #[tokio::test]
     async fn test_index_list_page(#[case] url: &str, #[case] assert_f: impl FnOnce(&str)) {
         let (service, _config, _rx, _server) = make_service().await;
@@ -642,6 +654,7 @@ mod tests {
         assert_f(text);
     }
 
+    #[serial(cwd_env)]
     #[tokio::test]
     async fn test_url_segment() {
         // this case is to test if we could process escaped URL correctly
@@ -664,6 +677,7 @@ mod tests {
         );
     }
 
+    #[serial(cwd_env)]
     #[tokio::test]
     async fn test_url_segment_fail() {
         // this case is to test if we could process escaped URL correctly
@@ -682,6 +696,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    #[serial(cwd_env)]
     #[tokio::test]
     async fn test_url_segment_query() {
         // this case is to test if we could process escaped URL correctly
@@ -741,6 +756,7 @@ mod tests {
         assert_eq!(task.origin, "https://storage.googleapis.com/");
     }
 
+    #[serial(cwd_env)]
     #[tokio::test]
     async fn test_proxy_head() {
         // if an object doesn't exist in s3, we should temporarily redirect users to upstream

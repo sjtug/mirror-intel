@@ -391,14 +391,13 @@ pub async fn download_artifacts(
 #[cfg(test)]
 mod tests {
     use httpmock::MockServer;
-    use tempdir::TempDir;
     use tokio::fs;
 
     use super::*;
 
     #[tokio::test]
     async fn must_download_payload_to_memory() {
-        let tmp_dir = TempDir::new("intel").unwrap();
+        let tmp_dir = tempfile::Builder::new().prefix("intel").tempdir().unwrap();
         let config = Config {
             buffer_path: tmp_dir.path().to_path_buf(),
             file_threshold_mb: 1,
@@ -430,7 +429,7 @@ mod tests {
 
     #[tokio::test]
     async fn must_download_payload_to_file() {
-        let tmp_dir = TempDir::new("intel").unwrap();
+        let tmp_dir = tempfile::Builder::new().prefix("intel").tempdir().unwrap();
         let config = Config {
             buffer_path: tmp_dir.path().to_path_buf(),
             file_threshold_mb: 0,
@@ -468,7 +467,7 @@ mod tests {
 
     #[tokio::test]
     async fn must_reject_large_payload() {
-        let tmp_dir = TempDir::new("intel").unwrap();
+        let tmp_dir = tempfile::Builder::new().prefix("intel").tempdir().unwrap();
         let config = Config {
             buffer_path: tmp_dir.path().to_path_buf(),
             file_threshold_mb: 0,

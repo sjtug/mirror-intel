@@ -212,6 +212,8 @@ pub struct S3Config {
     pub website_endpoint: String,
     /// Bucket name.
     pub bucket: String,
+    /// [Test only] Object key used by get-object to check S3 availability.
+    pub sentinel_object_key: Option<String>,
 }
 
 /// Configuration for Github Release endpoint.
@@ -369,13 +371,16 @@ pub fn collect_config() -> Config {
 #[cfg(test)]
 mod tests {
     use figment::Jail;
+    use serial_test::serial;
 
     use crate::common::{
         collect_config, EndpointOverride, Endpoints, GithubReleaseConfig, S3Config,
     };
     use crate::Config;
 
+    #[allow(clippy::result_large_err)]
     #[test]
+    #[serial(cwd_env)]
     fn must_collect_config() {
         const MIRROR_INTEL_TOML: &str = include_str!("../tests/config/mirror-intel.toml");
         const ROCKET_TOML: &str = include_str!("../tests/config/Rocket.toml");
@@ -430,6 +435,10 @@ mod tests {
                     endpoint: "https://s3.jcloud.sjtu.edu.cn".into(),
                     website_endpoint: "https://s3.jcloud.sjtu.edu.cn".into(),
                     bucket: "899a892efef34b1b944a19981040f55b-oss01".into(),
+                    sentinel_object_key: Some(
+                        "sjtug-internal/mirror-intel/releases/download/v0.1.35/mirror-intel.tar.gz"
+                            .into(),
+                    ),
                 },
                 user_agent: "mirror-intel / 0.1 (siyuan.internal.sjtug.org)".into(),
                 file_threshold_mb: 4,

@@ -7,6 +7,8 @@ use thiserror::Error;
 
 type PutObjectSdkError =
     aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::put_object::PutObjectError>;
+type GetObjectSdkError =
+    aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>;
 type ListObjectsSdkError =
     aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::list_objects::ListObjectsError>;
 
@@ -30,6 +32,8 @@ pub enum Error {
     InvalidRequest(()),
     #[error("Put Object Error {0}")]
     PutObjectError(Box<PutObjectSdkError>),
+    #[error("Get Object Error {0}")]
+    GetObjectsError(Box<GetObjectSdkError>),
     #[error("List Objects Error {0}")]
     ListObjectsError(Box<ListObjectsSdkError>),
     #[error("Timeout")]
@@ -42,6 +46,11 @@ impl ResponseError for Error {}
 impl From<PutObjectSdkError> for Error {
     fn from(error: PutObjectSdkError) -> Self {
         Self::PutObjectError(Box::new(error))
+    }
+}
+impl From<GetObjectSdkError> for Error {
+    fn from(error: GetObjectSdkError) -> Self {
+        Self::GetObjectsError(Box::new(error))
     }
 }
 impl From<ListObjectsSdkError> for Error {

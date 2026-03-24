@@ -1,6 +1,6 @@
 use actix_web::body::{BodyStream, SizedStream};
 use actix_web::http::header::ContentType;
-use actix_web::http::{header, StatusCode, Uri};
+use actix_web::http::{StatusCode, Uri};
 use actix_web::{HttpResponse, Responder};
 use futures::stream::TryStreamExt;
 use tracing::debug;
@@ -115,15 +115,19 @@ impl IntelObject {
         if resp.status().is_success() {
             if let Some(content_length) = resp.content_length() {
                 if content_length <= below_size_kb * 1024 {
-                    let content_type = resp.headers().get(header::CONTENT_TYPE).cloned();
+                    let content_type = resp.headers().get("content-type").cloned();
                     let text = resp.text().await?;
                     let text = f(text);
 
                     return Ok(if let Some(content_type) = content_type {
-                        HttpResponse::Ok()
-                            .content_type(content_type)
-                            .body(text)
-                            .into()
+                        if let Ok(content_type) = content_type.to_str() {
+                            HttpResponse::Ok()
+                                .content_type(content_type)
+                                .body(text)
+                                .into()
+                        } else {
+                            HttpResponse::Ok().body(text).into()
+                        }
                     } else {
                         HttpResponse::Ok().body(text).into()
                     });
@@ -143,10 +147,12 @@ impl IntelObject {
             }
         };
 
-        let code = upstream_resp.status().normalize();
+        let code = upstream_resp.status().as_u16().normalize();
         let mut resp = HttpResponse::build(code);
-        if let Some(content_type) = upstream_resp.headers().get(header::CONTENT_TYPE) {
-            resp.content_type(content_type);
+        if let Some(content_type) = upstream_resp.headers().get("content-type") {
+            if let Ok(content_type) = content_type.to_str() {
+                resp.content_type(content_type);
+            }
         }
         let content_length = upstream_resp.content_length();
         let stream = upstream_resp
@@ -220,10 +226,16 @@ trait StatusCodeExt {
 
 impl StatusCodeExt for StatusCode {
     fn normalize(self) -> StatusCode {
-        if self.as_u16() == 499 {
-            Self::NOT_FOUND
+        self.as_u16().normalize()
+    }
+}
+
+impl StatusCodeExt for u16 {
+    fn normalize(self) -> StatusCode {
+        if self == 499 {
+            StatusCode::NOT_FOUND
         } else {
-            self
+            StatusCode::from_u16(self).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
 }
@@ -254,6 +266,7 @@ mod tests {
                 endpoint: "http://localhost:8081".to_string(),
                 website_endpoint: server.base_url(),
                 bucket: "bucket".to_string(),
+                sentinel_object_key: None,
             },
             ..Default::default()
         };

@@ -1,6 +1,7 @@
 [default]
 address = "0.0.0.0"
 concurrent_download = 256
+max_pending_task = 16384
 user_agent = "mirror-intel / 0.1 (siyuan.internal.sjtug.org)"
 file_threshold_mb = 4
 ignore_threshold_mb = 1024
@@ -48,3 +49,4 @@ name = "jCloud S3"
 endpoint = "https://s3.jcloud.sjtu.edu.cn"
 website_endpoint = "https://s3.jcloud.sjtu.edu.cn"
 bucket = "899a892efef34b1b944a19981040f55b-oss01"
+sentinel_object_key = "sjtug-internal/mirror-intel/releases/download/v0.1.35/mirror-intel.tar.gz"
