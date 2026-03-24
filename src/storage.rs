@@ -1,7 +1,7 @@
 //! S3 storage backend.
 use std::time::Duration;
 
-use aws_sdk_s3::config::{BehaviorVersion, Region};
+use aws_sdk_s3::config::Region;
 use aws_sdk_s3::Client as S3Client;
 use tokio::time::timeout;
 
