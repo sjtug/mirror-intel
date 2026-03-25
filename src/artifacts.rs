@@ -3,15 +3,15 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::Bytes;
 use futures_util::StreamExt;
 use reqwest::{Client, Response};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::mpsc::{unbounded_channel, Receiver, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, UnboundedSender, unbounded_channel};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tracing::{info, instrument, warn};
 use url::Url;
@@ -56,10 +56,10 @@ fn next_buffer_path(config: &Config) -> PathBuf {
 
 /// Remove a temporary file, ignoring not-found errors.
 async fn remove_buffer_file(path: &Path) {
-    if let Err(err) = fs::remove_file(path).await {
-        if err.kind() != std::io::ErrorKind::NotFound {
-            warn!(error=?err, path=%path.display(), "failed to remove cache file");
-        }
+    if let Err(err) = fs::remove_file(path).await
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(error=?err, path=%path.display(), "failed to remove cache file");
     }
 }
 

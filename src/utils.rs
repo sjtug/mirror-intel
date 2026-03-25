@@ -112,27 +112,26 @@ impl IntelObject {
         let upstream = task.upstream_url();
         let resp = intel_mission.client.get(upstream).send().await?;
 
-        if resp.status().is_success() {
-            if let Some(content_length) = resp.content_length() {
-                if content_length <= below_size_kb * 1024 {
-                    let content_type = resp.headers().get("content-type").cloned();
-                    let text = resp.text().await?;
-                    let text = f(text);
+        if resp.status().is_success()
+            && let Some(content_length) = resp.content_length()
+            && content_length <= below_size_kb * 1024
+        {
+            let content_type = resp
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_owned());
+            let text = resp.text().await?;
+            let text = f(text);
 
-                    return Ok(if let Some(content_type) = content_type {
-                        if let Ok(content_type) = content_type.to_str() {
-                            HttpResponse::Ok()
-                                .content_type(content_type)
-                                .body(text)
-                                .into()
-                        } else {
-                            HttpResponse::Ok().body(text).into()
-                        }
-                    } else {
-                        HttpResponse::Ok().body(text).into()
-                    });
-                }
-            }
+            return Ok(if let Some(content_type) = content_type {
+                HttpResponse::Ok()
+                    .content_type(content_type.as_str())
+                    .body(text)
+                    .into()
+            } else {
+                HttpResponse::Ok().body(text).into()
+            });
         }
 
         Ok(self.redirect(config).into())
@@ -147,13 +146,14 @@ impl IntelObject {
             }
         };
 
-        let code = upstream_resp.status().as_u16().normalize();
+        let code = upstream_resp.status().normalize();
         let mut resp = HttpResponse::build(code);
-        if let Some(content_type) = upstream_resp.headers().get("content-type") {
-            if let Ok(content_type) = content_type.to_str() {
-                resp.content_type(content_type);
-            }
+        if let Some(content_type) = upstream_resp.headers().get("content-type")
+            && let Ok(ct_str) = content_type.to_str()
+        {
+            resp.content_type(ct_str);
         }
+
         let content_length = upstream_resp.content_length();
         let stream = upstream_resp
             .bytes_stream()
@@ -175,11 +175,11 @@ impl IntelObject {
     ) -> Result<IntelResponse> {
         match &self {
             Self::Cached { resp, .. } => {
-                if let Some(content_length) = resp.content_length() {
-                    if content_length <= size_kb * 1024 {
-                        debug!("{} <= {}, direct stream", content_length, size_kb * 1024);
-                        return Ok(self.reverse_proxy(intel_mission).await?.into());
-                    }
+                if let Some(content_length) = resp.content_length()
+                    && content_length <= size_kb * 1024
+                {
+                    debug!("{} <= {}, direct stream", content_length, size_kb * 1024);
+                    return Ok(self.reverse_proxy(intel_mission).await?.into());
                 }
                 Ok(self.redirect(config).into())
             }
@@ -226,17 +226,22 @@ trait StatusCodeExt {
 
 impl StatusCodeExt for StatusCode {
     fn normalize(self) -> StatusCode {
-        self.as_u16().normalize()
+        if self.as_u16() == 499 {
+            Self::NOT_FOUND
+        } else {
+            self
+        }
     }
 }
 
-impl StatusCodeExt for u16 {
+impl StatusCodeExt for reqwest::StatusCode {
     fn normalize(self) -> StatusCode {
-        if self == 499 {
-            StatusCode::NOT_FOUND
+        let code = if self.as_u16() == 499 {
+            404
         } else {
-            StatusCode::from_u16(self).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+            self.as_u16()
+        };
+        StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
 
@@ -248,7 +253,7 @@ mod tests {
     use actix_http::body::to_bytes;
     use httpmock::{Method, MockServer};
     use reqwest::Client;
-    use tokio::sync::mpsc::{channel, Receiver};
+    use tokio::sync::mpsc::{Receiver, channel};
 
     use crate::common::{IntelObject, IntelResponse, S3Config, Task};
     use crate::storage::get_anonymous_s3_client;

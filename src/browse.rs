@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use actix_web::http::header::ContentType;
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 
 use crate::common::{Config, IntelMission, IntelResponse, Redirect};
 use crate::intel_path::IntelPath;
