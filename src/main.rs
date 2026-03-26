@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use actix_web::{App, HttpServer, guard, web};
 use prometheus::{Encoder, TextEncoder};
-use reqwest::{Client, ClientBuilder};
 use tokio::sync::mpsc::channel;
 use tracing::{info, warn};
 use tracing_actix_web::TracingLogger;
@@ -30,6 +29,8 @@ use repos::{configure_repo_routes, index};
 use storage::check_s3;
 use utils::not_found;
 
+use crate::common::{new_reqwest_client, new_reqwest_client_builder};
+
 mod artifacts;
 mod browse;
 mod common;
@@ -39,6 +40,10 @@ mod queue;
 mod repos;
 mod storage;
 mod utils;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 /// Create a logger with styled output, env-filter, and async logging.
 fn setup_log() -> impl Drop {
@@ -129,13 +134,13 @@ async fn main() {
 
         // Spawn caching future.
         tokio::spawn(async move {
-            download_artifacts(rx, Client::new(), config_download, metrics_download).await;
+            download_artifacts(rx, new_reqwest_client(), config_download, metrics_download).await;
         });
 
         tx
     });
 
-    let client = ClientBuilder::new()
+    let client = new_reqwest_client_builder()
         .user_agent(&config.user_agent)
         .build()
         .unwrap();

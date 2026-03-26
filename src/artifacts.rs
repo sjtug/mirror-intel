@@ -393,6 +393,8 @@ mod tests {
     use httpmock::MockServer;
     use tokio::fs;
 
+    use crate::common::new_reqwest_client;
+
     use super::*;
 
     #[tokio::test]
@@ -412,7 +414,7 @@ mod tests {
         });
 
         let payload = download_payload(
-            &Client::new(),
+            &new_reqwest_client(),
             server.url("/test.bin").parse().unwrap(),
             &config,
         )
@@ -444,7 +446,7 @@ mod tests {
         });
 
         let payload = download_payload(
-            &Client::new(),
+            &new_reqwest_client(),
             server.url("/test.bin").parse().unwrap(),
             &config,
         )
@@ -482,7 +484,7 @@ mod tests {
         });
 
         let result = download_payload(
-            &Client::new(),
+            &new_reqwest_client(),
             server.url("/test.bin").parse().unwrap(),
             &config,
         )

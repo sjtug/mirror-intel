@@ -1,2 +1,7 @@
 /target
 .env
+
+.direnv/
+.pre-commit-config.flake.yaml
+result/
+

@@ -11,7 +11,12 @@ actix-http = "3.12"
 actix-web = { version = "4.13", features = ["macros"] }
 # NOTE: avoid massive deps used by aws-config
 # aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = { version = "1.122.0", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1.122.0", default-features = false, features = [
+  "behavior-version-latest",
+  "rt-tokio",
+  "http-1x",
+  "rustls",
+] }
 bytes = "1.11"
 figment = { version = "0.10", features = ["toml"] }
 futures = "0.3"
@@ -20,7 +25,15 @@ lazy_static = "1.4"
 percent-encoding = "2.1"
 prometheus = "0.14"
 regex = "1"
-reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = [
+  "stream",
+  "rustls-no-provider",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+  "std",
+  "tls12",
+  "ring",
+] }
 rstest = "0.26"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
@@ -38,3 +51,6 @@ tempfile = "3"
 httpmock = "0.8"
 figment = { version = "0.10", features = ["test"] }
 serial_test = "3"
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
