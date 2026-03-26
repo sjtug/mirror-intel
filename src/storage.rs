@@ -15,7 +15,7 @@ fn s3_region(s3_config: &S3Config) -> Region {
 /// Creates an authenticated S3 client.
 ///
 /// The default credential provider is used.
-async fn get_s3_client(s3_config: &S3Config) -> S3Client {
+fn get_s3_client(s3_config: &S3Config) -> S3Client {
     let s3_builder = aws_sdk_s3::Config::builder()
         .region(s3_region(s3_config))
         .endpoint_url(s3_config.endpoint.clone())
@@ -47,7 +47,7 @@ pub async fn stream_to_s3(
     stream: aws_sdk_s3::primitives::ByteStream,
     s3_config: &S3Config,
 ) -> Result<aws_sdk_s3::operation::put_object::PutObjectOutput> {
-    let s3_client = get_s3_client(s3_config).await;
+    let s3_client = get_s3_client(s3_config);
 
     Ok(s3_client
         .put_object()
@@ -62,7 +62,7 @@ pub async fn stream_to_s3(
 /// Check whether authenticated S3 storage is available.
 pub async fn check_s3(s3_config: &S3Config) -> Result<()> {
     timeout(Duration::from_secs(1), async move {
-        let s3_client = get_s3_client(s3_config).await;
+        let s3_client = get_s3_client(s3_config);
 
         // s3_client
         //     .list_objects()
