@@ -454,18 +454,15 @@ mod tests {
     use figment::providers::{Format, Toml};
     use figment::util::map;
     use httpmock::MockServer;
-    use reqwest::ClientBuilder;
     use rstest::rstest;
     use serial_test::serial;
     use tokio::sync::mpsc::{Receiver, channel};
     use url::Url;
 
-    use crate::common::EndpointOverride;
-    use crate::{
-        common::{Config, IntelMission, Metrics},
-        list, not_found, queue_length,
-        storage::get_anonymous_s3_client,
+    use crate::common::{
+        Config, EndpointOverride, IntelMission, Metrics, new_reqwest_client_builder,
     };
+    use crate::{list, not_found, queue_length, storage::get_anonymous_s3_client};
 
     use super::*;
 
@@ -508,7 +505,7 @@ mod tests {
         let config = Arc::new(config);
 
         let (tx, rx) = channel(1024);
-        let client = ClientBuilder::new()
+        let client = new_reqwest_client_builder()
             .user_agent(&config.user_agent)
             .build()
             .unwrap();
