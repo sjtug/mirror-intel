@@ -1,7 +1,7 @@
 use actix_web::http::{Method, Uri};
 use actix_web::{HttpResponse, Route, guard, web};
-use lazy_static::lazy_static;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::error::Result;
 use crate::intel_path::IntelPath;
@@ -100,15 +100,23 @@ pub fn rust_static_allow(_config: &Config, path: &str) -> bool {
     true
 }
 
-pub fn wheels_allow(_config: &Config, path: &str) -> bool {
+pub fn wheel_allow_legacy(_config: &Config, path: &str) -> bool {
     path.ends_with(".whl") || path.ends_with(".html")
 }
 
+pub fn wheels_allow(_config: &Config, path: &str) -> bool {
+    if let Some((wheel_path, sha256)) = path.split_once("#sha256=") {
+        return wheel_path.ends_with(".whl")
+            && sha256.len() == 64
+            && sha256.chars().all(|c| c.is_ascii_hexdigit());
+    }
+
+    wheel_allow_legacy(_config, path)
+}
+
 pub fn github_release_allow(config: &Config, path: &str) -> bool {
-    lazy_static! {
-        static ref REGEX: Regex =
-            Regex::new("^[^/]*/[^/]*/releases/download/[^/]*/[^/]*$").unwrap();
-    };
+    static REGEX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("^[^/]+/[^/]+/releases/download/[^/]+/[^/]+$").unwrap());
 
     if !config
         .github_release
@@ -123,10 +131,9 @@ pub fn github_release_allow(config: &Config, path: &str) -> bool {
 }
 
 pub fn sjtug_internal_allow(_config: &Config, path: &str) -> bool {
-    lazy_static! {
-        static ref REGEX: Regex =
-            Regex::new("^[^/]*/releases/download/[^/]*/[^/]*.(tar.gz|zip)$").unwrap();
-    };
+    static REGEX: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new("^[^/]*/releases/download/[^/]*/[^/]*[.](tar[.]gz|zip)$").unwrap()
+    });
 
     REGEX.is_match(path)
 }
@@ -736,6 +743,28 @@ mod tests {
             "flutter/fonts/03bdd42a57aff5c496859f38d29825843d7fe68e/fonts.zip",
         ));
         assert!(!flutter_allow(&config, "flutter/coverage/lcov.info"));
+    }
+
+    #[test]
+    fn test_wheels_allow() {
+        let config = Config::default();
+        assert!(wheels_allow(&config, "torch_stable.html"));
+        assert!(wheels_allow(
+            &config,
+            "torch-2.0.0-cp311-cp311-manylinux.whl"
+        ));
+        assert!(!wheels_allow(
+            &config,
+            "torch-2.0.0-cp311-cp311-manylinux.whl#sha256=0123456789abcdef",
+        ));
+        assert!(wheels_allow(
+            &config,
+            "cpu/torch-2.11.0%2Bcpu-cp314-cp314t-manylinux_2_28_x86_64.whl",
+        ));
+        assert!(wheels_allow(
+            &config,
+            "cu130/torch-2.11.0%2Bcu130-cp314-cp314t-manylinux_2_28_x86_64.whl",
+        ));
     }
 
     #[test]

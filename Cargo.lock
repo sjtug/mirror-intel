@@ -1823,7 +1823,6 @@ dependencies = [
  "futures",
  "futures-util",
  "httpmock",
- "lazy_static",
  "percent-encoding",
  "prometheus",
  "regex",

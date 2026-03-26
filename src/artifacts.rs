@@ -29,7 +29,7 @@ enum UploadPayload {
 }
 
 impl UploadPayload {
-    fn content_length(&self) -> u64 {
+    const fn content_length(&self) -> u64 {
         match self {
             Self::Memory(bytes) => bytes.len() as u64,
             Self::File { content_length, .. } => *content_length,
@@ -40,11 +40,11 @@ impl UploadPayload {
 /// Global unique file id counter.
 static FILE_ID: AtomicUsize = AtomicUsize::new(0);
 
-fn max_download_size(config: &Config) -> u64 {
+const fn max_download_size(config: &Config) -> u64 {
     config.ignore_threshold_mb.saturating_mul(BYTES_PER_MB)
 }
 
-fn file_threshold(config: &Config) -> u64 {
+const fn file_threshold(config: &Config) -> u64 {
     config.file_threshold_mb.saturating_mul(BYTES_PER_MB)
 }
 

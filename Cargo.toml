@@ -21,7 +21,6 @@ bytes = "1.11"
 figment = { version = "0.10", features = ["toml"] }
 futures = "0.3"
 futures-util = "0.3"
-lazy_static = "1.4"
 percent-encoding = "2.1"
 prometheus = "0.14"
 regex = "1"
