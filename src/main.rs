@@ -29,7 +29,7 @@ use repos::{configure_repo_routes, index};
 use storage::check_s3;
 use utils::not_found;
 
-use crate::common::{new_reqwest_client, new_reqwest_client_builder};
+use reqwest::{Client, ClientBuilder};
 
 mod artifacts;
 mod browse;
@@ -134,13 +134,13 @@ async fn main() {
 
         // Spawn caching future.
         tokio::spawn(async move {
-            download_artifacts(rx, new_reqwest_client(), config_download, metrics_download).await;
+            download_artifacts(rx, Client::new(), config_download, metrics_download).await;
         });
 
         tx
     });
 
-    let client = new_reqwest_client_builder()
+    let client = ClientBuilder::new()
         .user_agent(&config.user_agent)
         .build()
         .unwrap();

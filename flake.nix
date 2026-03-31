@@ -49,6 +49,7 @@
           ...
         }:
         let
+          inherit (pkgs) gcc pkgsStatic;
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (p: p.rustToolchain);
 
           craneAttrs = import ./nix/crane.nix { inherit craneLib pkgs lib; };
@@ -56,6 +57,7 @@
             src
             commonArgs
             cargoArtifacts
+            mergeCraneArgs
             ;
 
           # Build the actual crate itself, reusing the dependency
@@ -68,8 +70,12 @@
           );
 
           my-crate-musl = craneLib.buildPackage (
-            commonArgs
-            // {
+            mergeCraneArgs commonArgs {
+              nativeBuildInputs = [
+                # Required by aws-lc-sys
+                gcc
+                pkgsStatic.stdenv.cc
+              ];
               # Cross compile with musl
               CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
             }
@@ -111,6 +117,7 @@
             programs = {
               autocorrect.enable = true;
               nixfmt.enable = true;
+              taplo.enable = true;
               zizmor.enable = true;
             };
           };
@@ -197,7 +204,7 @@
             # Required for tikv-jemallocator
             hardeningDisable = [ "fortify" ];
 
-            nativeBuildInputs =
+            packages =
               with pkgs;
               [
                 # pkg-config
@@ -205,17 +212,17 @@
 
                 ### Miscellaneous ###
                 # cargo-audit
-                # cargo-bloat
+                cargo-bloat
                 # cargo-license
                 # cargo-nextest
-                # cargo-outdated
+                cargo-outdated
                 # cargo-show-asm
                 # samply
                 # watchexec
                 # bacon
               ]
               ++ lib.optionals (!pkgs.stdenv.isDarwin) [
-                # cargo-llvm-cov
+                cargo-llvm-cov
                 # valgrind
               ];
           };
