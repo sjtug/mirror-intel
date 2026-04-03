@@ -46,8 +46,9 @@ mod tests {
     use actix_web::dev::{Service, ServiceResponse};
     use actix_web::test::{TestRequest, call_service, init_service};
     use actix_web::{App, web};
+    use reqwest::Client;
 
-    use crate::common::{S3Config, new_reqwest_client};
+    use crate::common::S3Config;
     use crate::storage::get_anonymous_s3_client;
     use crate::{IntelMission, Metrics, queue_length};
 
@@ -57,7 +58,7 @@ mod tests {
         let s3_config = S3Config::default();
         let mission = IntelMission {
             tx: None,
-            client: new_reqwest_client(),
+            client: Client::new(),
             metrics,
             s3_client: Arc::new(get_anonymous_s3_client(&s3_config)),
         };

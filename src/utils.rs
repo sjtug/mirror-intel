@@ -252,9 +252,10 @@ mod tests {
 
     use actix_http::body::to_bytes;
     use httpmock::{Method, MockServer};
+    use reqwest::Client;
     use tokio::sync::mpsc::{Receiver, channel};
 
-    use crate::common::{IntelObject, IntelResponse, S3Config, Task, new_reqwest_client};
+    use crate::common::{IntelObject, IntelResponse, S3Config, Task};
     use crate::storage::get_anonymous_s3_client;
     use crate::{Config, IntelMission, Metrics};
 
@@ -277,7 +278,7 @@ mod tests {
         let config = Arc::new(config);
 
         let (tx, rx) = channel(1024);
-        let client = new_reqwest_client();
+        let client = Client::new();
 
         let mission = IntelMission {
             tx: Some(tx),

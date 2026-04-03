@@ -24,15 +24,7 @@ futures-util = "0.3"
 percent-encoding = "2.1"
 prometheus = "0.14"
 regex = "1"
-reqwest = { version = "0.13", default-features = false, features = [
-  "stream",
-  "rustls-no-provider",
-] }
-rustls = { version = "0.23", default-features = false, features = [
-  "std",
-  "tls12",
-  "ring",
-] }
+reqwest = { version = "0.13", features = ["stream"] }
 rstest = "0.26"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
@@ -44,6 +36,7 @@ tracing-bunyan-formatter = "0.3"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.2"
+scraper = "0.26.0"
 
 [dev-dependencies]
 tempfile = "3"
