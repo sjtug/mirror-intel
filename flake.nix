@@ -80,6 +80,11 @@
               CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
             }
           );
+
+          E2ETests = import ./tests/e2e {
+            inherit pkgs;
+            workspace = my-crate;
+          };
         in
         {
           _module.args.pkgs = import inputs.nixpkgs {
@@ -190,6 +195,9 @@
                 doCheck = true;
               }
             );
+          }
+          // {
+            inherit (E2ETests) e2e-simple;
           };
 
           devShells.default = craneLib.devShell {
