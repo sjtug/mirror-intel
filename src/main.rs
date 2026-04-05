@@ -36,6 +36,7 @@ mod browse;
 mod common;
 mod error;
 mod intel_path;
+mod pypi_index;
 mod queue;
 mod repos;
 mod storage;

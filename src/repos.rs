@@ -1,10 +1,12 @@
+use std::sync::LazyLock;
+
 use actix_web::http::{Method, Uri};
 use actix_web::{HttpResponse, Route, guard, web};
 use regex::Regex;
-use std::sync::LazyLock;
 
 use crate::error::Result;
 use crate::intel_path::IntelPath;
+use crate::pypi_index::{PypiIndexState, schedule_wheels_index_worker};
 use crate::{
     Error,
     common::{Config, Endpoints, IntelMission, IntelResponse, Redirect, Task},
@@ -15,7 +17,7 @@ pub fn simple_intel(
     origin_injection: impl FnMut(&Endpoints) -> &str + Clone + Send + Sync + 'static,
     route: &'static str,
     filter: impl FnMut(&Config, &str) -> bool + Clone + Send + 'static,
-    proxy: impl FnMut(&str) -> bool + Clone + Send + 'static,
+    proxy: impl FnMut(&Config, &str) -> bool + Clone + Send + 'static,
 ) -> Route {
     let handler = move |path: IntelPath,
                         method: Method,
@@ -35,28 +37,33 @@ pub fn simple_intel(
                 path,
             };
 
+            // Redirect (307) to upstream if any query param exists.
             if let Some(query) = uri.query() {
                 return Ok::<_, Error>(
                     Redirect::Temporary(format!("{}?{}", task.upstream_url(), query)).into(),
                 );
             }
 
-            if !filter(&config, &task.path) {
-                return Ok(Redirect::Permanent(task.upstream_url().to_string()).into());
-            }
-
-            if proxy(&task.path) {
-                return Ok(if method == Method::HEAD {
+            // Proxy if the path is proxied.
+            if proxy(&config, &task.path) {
+                let resp = if method == Method::HEAD {
                     HttpResponse::Ok().finish().into()
                 } else {
                     task.resolve_upstream()
                         .reverse_proxy(&intel_mission)
                         .await?
                         .into()
-                });
+                };
+                return Ok(resp);
             }
 
-            Ok(if method == Method::HEAD {
+            // Redirect (308) to upstream if the path is filtered out.
+            if !filter(&config, &task.path) {
+                return Ok(Redirect::Permanent(task.upstream_url().to_string()).into());
+            }
+
+            // Otherwise, follow smart cache strategy.
+            let resp = if method == Method::HEAD {
                 task.resolve_no_content(&intel_mission, &config)
                     .await?
                     .redirect(&config)
@@ -66,15 +73,17 @@ pub fn simple_intel(
                     .await?
                     .stream_small_cached(config.direct_stream_size_kb, &intel_mission, &config)
                     .await?
-            })
+            };
+            Ok(resp)
         }
     };
+    // Route with handler for GET and HEAD, otherwise 404
     web::route()
         .guard(guard::Any(guard::Get()).or(guard::Head()))
         .to(handler)
 }
 
-pub const fn disallow_all(_path: &str) -> bool {
+pub const fn disallow_all(_config: &Config, _path: &str) -> bool {
     false
 }
 
@@ -100,10 +109,6 @@ pub fn rust_static_allow(_config: &Config, path: &str) -> bool {
     true
 }
 
-pub fn wheel_allow_legacy(_config: &Config, path: &str) -> bool {
-    path.ends_with(".whl") || path.ends_with(".html")
-}
-
 pub fn wheels_allow(_config: &Config, path: &str) -> bool {
     if let Some((wheel_path, sha256)) = path.split_once("#sha256=") {
         return wheel_path.ends_with(".whl")
@@ -111,7 +116,7 @@ pub fn wheels_allow(_config: &Config, path: &str) -> bool {
             && sha256.chars().all(|c| c.is_ascii_hexdigit());
     }
 
-    wheel_allow_legacy(_config, path)
+    path.ends_with(".whl") || path.ends_with(".html")
 }
 
 pub fn github_release_allow(config: &Config, path: &str) -> bool {
@@ -173,9 +178,37 @@ pub fn linuxbrew_allow(_config: &Config, path: &str) -> bool {
     path.contains(".x86_64_linux")
 }
 
-pub fn wheels_proxy(path: &str) -> bool {
-    path.ends_with(".html")
+pub fn wheels_proxy(config: &Config, path: &str) -> bool {
+    pub static PYTORCH_WHEELS_INDEX_STATE: LazyLock<PypiIndexState> =
+        LazyLock::new(PypiIndexState::default);
+
+    if path.ends_with(".html") {
+        return true;
+    }
+
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    if !leaf.contains(".whl") {
+        return true;
+    }
+
+    schedule_wheels_index_worker(
+        config.endpoints.pytorch_wheels.clone(),
+        &PYTORCH_WHEELS_INDEX_STATE,
+    );
+
+    let normalized_path = path.trim_end_matches('/');
+    let index = PYTORCH_WHEELS_INDEX_STATE
+        .entries
+        .read()
+        .expect("wheels index lock poisoned");
+    index
+        .iter()
+        .any(|entry| normalized_path.ends_with(entry.trim_end_matches('/')))
 }
+
+// pub fn wheels_proxy(path: &str) -> bool {
+//     path.ends_with(".html")
+// }
 
 pub fn gradle_allow(_config: &Config, path: &str) -> bool {
     path.ends_with(".zip")
@@ -785,7 +818,7 @@ mod tests {
     #[serial(cwd_env)]
     #[tokio::test]
     async fn test_proxy_head() {
-        // if an object doesn't exist in s3, we should temporarily redirect users to upstream
+        // proxied HEAD path should return 200 directly.
         let (service, _, _rx, _server) = make_service().await;
         let object = Task {
             storage: "pytorch-wheels",
@@ -793,6 +826,37 @@ mod tests {
             path: "torch_stable.html".to_string(),
             retry_limit: 3,
         };
+        let req = TestRequest::default()
+            .method(Method::HEAD)
+            .uri(object.root_path().as_str())
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn test_proxy_head_wheels_index_path() {
+        // Ensure dynamic index entries are proxied before filter redirect.
+        {
+            pub static PYTORCH_WHEELS_INDEX_STATE: LazyLock<PypiIndexState> =
+                LazyLock::new(PypiIndexState::default);
+            let mut entries = PYTORCH_WHEELS_INDEX_STATE
+                .entries
+                .write()
+                .expect("wheels index lock poisoned");
+            entries.clear();
+            entries.push("torch/".to_string());
+        }
+
+        let (service, _, _rx, _server) = make_service().await;
+        let object = Task {
+            storage: "pytorch-wheels",
+            origin: "https://download.pytorch.org/whl".to_string(),
+            path: "torch".to_string(),
+            retry_limit: 3,
+        };
+
         let req = TestRequest::default()
             .method(Method::HEAD)
             .uri(object.root_path().as_str())
