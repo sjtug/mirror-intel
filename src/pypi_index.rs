@@ -267,6 +267,10 @@ pub async fn fetch_pypi_index_cached(
 ) -> Result<Vec<String>, Error> {
     // Get the root page (always fetch root to check for changes)
     let root_resp = client.get(url).send().await?;
+    if !root_resp.status().is_success() {
+        return Err(Error::HTTPError(root_resp.status()));
+    }
+
     let root_url = root_resp.url().clone();
 
     let root_etag = root_resp
@@ -826,6 +830,36 @@ mod tests {
 
         assert_eq!(pages, vec!["pkg"]);
         pkg_conditional.assert_calls_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_pypi_index_cached_root_http_error() {
+        use httpmock::Method::GET;
+        use httpmock::MockServer;
+
+        let server = MockServer::start_async().await;
+        let root_mock = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/whl");
+                then.status(404)
+                    .header("Content-Type", "text/html")
+                    .body("<html><body>not found</body></html>");
+            })
+            .await;
+
+        let client = Client::new();
+        let mut cache = PypiIndexCache::new();
+        let config = PypiIndexConfig::default();
+
+        let result =
+            fetch_pypi_index_cached(&client, &(server.base_url() + "/whl"), &mut cache, &config)
+                .await;
+
+        assert!(
+            matches!(result, Err(Error::HTTPError(status)) if status == reqwest::StatusCode::NOT_FOUND)
+        );
+        assert!(cache.get("").is_none());
+        root_mock.assert_calls_async(1).await;
     }
 
     #[test]
