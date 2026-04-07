@@ -1,16 +1,75 @@
 use reqwest::Client;
+use reqwest::header::{ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED};
 use scraper::{Html, Selector};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::{
-    collections::{BTreeSet, HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{RwLock, atomic::AtomicBool},
 };
 use tokio::time::MissedTickBehavior;
-use tracing::warn;
+use tracing::{debug, warn};
 use url::Url;
 
+use crate::common::{Config, PypiIndexConfig};
 use crate::error::Error;
+
+/// Cached data for a single index page
+#[derive(Debug, Clone, Default)]
+pub struct CachedPage {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub links: Vec<String>,
+}
+
+/// Cache for PyPI index pages with ETag/Last-Modified support
+#[derive(Debug, Default)]
+pub struct PypiIndexCache {
+    pages: HashMap<String, CachedPage>,
+}
+
+impl PypiIndexCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Get cached page data for a relative path
+    pub fn get(&self, relative_path: &str) -> Option<&CachedPage> {
+        self.pages.get(relative_path)
+    }
+
+    /// Insert or update cached page data
+    pub fn insert(&mut self, relative_path: String, page: CachedPage) {
+        self.pages.insert(relative_path, page);
+    }
+
+    /// Get all valid index paths (non-empty paths with links)
+    pub fn valid_pages(&self) -> Vec<String> {
+        let mut pages: Vec<_> = self
+            .pages
+            .iter()
+            .filter(|(path, cached)| !path.is_empty() && !cached.links.is_empty())
+            .map(|(path, _)| path.clone())
+            .collect();
+        pages.sort();
+        pages
+    }
+}
+
+/// Result of a conditional fetch operation
+#[derive(Debug)]
+pub enum FetchResult {
+    /// Page was fetched successfully (200 OK)
+    Fetched {
+        html: String,
+        etag: Option<String>,
+        last_modified: Option<String>,
+    },
+    /// Page was not modified (304 Not Modified)
+    NotModified,
+    /// Fetch failed
+    Error(Error),
+}
 
 /// Parse the HTML content of a PyPI index page and extract all href attributes (links) from anchor tags.
 pub fn parse_pypi_index(html: &str) -> Vec<String> {
@@ -130,70 +189,208 @@ fn resolve_child_url(root: &Url, parent: &Url, link: &str) -> Option<(String, Ur
     Some((relative, child))
 }
 
-/// From a PyPI index url (e.g. <https://download.pytorch.org/whl>),
-/// fetch the HTML content under root path, parse via `parse_pypi_index`,
-/// and recursively fetch the HTML content of each link in the page,
-/// until the parsed content contains links to only .whl files.
-///
-/// # Arguments
-///  * `url`: The root PyPI index URL.
-///
-/// # Return
-///  * `Result<Vec<String>, Error>`: A list of all relative paths that are valid index pages.
-pub async fn fetch_pypi_index(url: &str) -> Result<Vec<String>, Error> {
-    let client = Client::new();
+/// Fetch a page with conditional GET support (ETag/Last-Modified).
+/// Returns NotModified if the page hasn't changed, or Fetched with new content.
+async fn fetch_page_conditional(
+    client: &Client,
+    url: &Url,
+    cached: Option<&CachedPage>,
+) -> FetchResult {
+    let mut request = client.get(url.clone());
 
-    // Get the root page content and final URL of request
-    let root_resp = client.get(url).send().await?;
-    let root_url = root_resp.url().clone();
-    let root_html = root_resp.text().await?;
-
-    // Initialize BFS queue containing (relative_path, page_url, html), and track seen pages to avoid cycles.
-    let mut queue = VecDeque::from([(String::new(), root_url.clone(), root_html)]);
-    let mut seen_pages = HashSet::from([String::new()]);
-    let mut valid_pages = BTreeSet::new();
-
-    // BFS traversal of index pages
-    while let Some((relative_path, page_url, html)) = queue.pop_front() {
-        // Parse the page content to extract href links.
-        let links = parse_pypi_index(&html);
-
-        // Add to valid pages if it contains valid links
-        if !links.is_empty() && !relative_path.is_empty() {
-            valid_pages.insert(relative_path.clone());
+    // Add conditional headers if we have cached data
+    if let Some(cached) = cached {
+        if let Some(ref etag) = cached.etag {
+            request = request.header(IF_NONE_MATCH, etag);
         }
-
-        for link in links {
-            // Skip links that point to large files.
-            if is_largefile_link(&link) {
-                continue;
-            }
-
-            // Resolve the link to an absolute URL, and get the path relative to root URL.
-            let Some((next_relative_path, next_url)) =
-                resolve_child_url(&root_url, &page_url, &link)
-            else {
-                continue;
-            };
-
-            // Skip if we've already seen this page before.
-            if !seen_pages.insert(next_relative_path.clone()) {
-                continue;
-            }
-
-            // Fetch the page content and add to queue for further processing.
-            let next_html = client.get(next_url.clone()).send().await?.text().await?;
-            queue.push_back((next_relative_path, next_url, next_html));
+        if let Some(ref last_modified) = cached.last_modified {
+            request = request.header(IF_MODIFIED_SINCE, last_modified);
         }
     }
 
-    // Return the valid index pages, in lexicographical order
-    Ok(valid_pages.into_iter().collect::<Vec<_>>())
+    let response = match request.send().await {
+        Ok(resp) => resp,
+        Err(e) => return FetchResult::Error(e.into()),
+    };
+
+    // 304 Not Modified - use cached data
+    if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+        return FetchResult::NotModified;
+    }
+
+    // Check for errors
+    if !response.status().is_success() {
+        return FetchResult::Error(Error::HTTPError(response.status()));
+    }
+
+    // Extract caching headers
+    let etag = response
+        .headers()
+        .get(ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let last_modified = response
+        .headers()
+        .get(LAST_MODIFIED)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    // Get body
+    match response.text().await {
+        Ok(html) => FetchResult::Fetched {
+            html,
+            etag,
+            last_modified,
+        },
+        Err(e) => FetchResult::Error(e.into()),
+    }
+}
+
+/// Fetch PyPI index with caching support, depth limits, and page limits.
+///
+/// On first call (empty cache), performs full BFS crawl up to max_depth.
+/// On subsequent calls, uses conditional requests to only re-fetch changed pages.
+///
+/// # Arguments
+/// * `client`: HTTP client for requests
+/// * `url`: Root PyPI index URL
+/// * `cache`: Mutable cache to store/retrieve page data
+/// * `config`: PyPI index configuration (max_depth, max_pages)
+///
+/// # Returns
+/// * `Result<Vec<String>, Error>`: List of valid index page paths
+pub async fn fetch_pypi_index_cached(
+    client: &Client,
+    url: &str,
+    cache: &mut PypiIndexCache,
+    config: &PypiIndexConfig,
+) -> Result<Vec<String>, Error> {
+    // Get the root page (always fetch root to check for changes)
+    let root_resp = client.get(url).send().await?;
+    let root_url = root_resp.url().clone();
+
+    let root_etag = root_resp
+        .headers()
+        .get(ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let root_last_modified = root_resp
+        .headers()
+        .get(LAST_MODIFIED)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let root_html = root_resp.text().await?;
+    let root_links = parse_pypi_index(&root_html);
+
+    // Cache the root page
+    cache.insert(
+        String::new(),
+        CachedPage {
+            etag: root_etag,
+            last_modified: root_last_modified,
+            links: root_links.clone(),
+        },
+    );
+
+    // BFS queue: (relative_path, page_url, depth)
+    // We process links from cached data, only fetching when needed
+    let mut queue: VecDeque<(String, Url, usize)> = VecDeque::new();
+    let mut seen_pages: HashSet<String> = HashSet::from([String::new()]);
+    let mut pages_fetched: usize = 1; // root already fetched
+
+    // Seed queue with links from root page
+    for link in &root_links {
+        if is_largefile_link(link) {
+            continue;
+        }
+        if let Some((rel_path, abs_url)) = resolve_child_url(&root_url, &root_url, link)
+            && seen_pages.insert(rel_path.clone())
+        {
+            queue.push_back((rel_path, abs_url, 1));
+        }
+    }
+
+    // BFS traversal with depth and page limits
+    while let Some((relative_path, page_url, depth)) = queue.pop_front() {
+        // Enforce depth limit
+        if depth > config.max_depth {
+            debug!(
+                "Skipping {} - exceeds max depth {}",
+                relative_path, config.max_depth
+            );
+            continue;
+        }
+
+        // Enforce page limit
+        if pages_fetched >= config.max_pages {
+            debug!(
+                "Reached max pages limit {}, stopping crawl",
+                config.max_pages
+            );
+            break;
+        }
+
+        // Fetch with conditional GET if we have cached data
+        let cached = cache.get(&relative_path);
+        let fetch_result = fetch_page_conditional(client, &page_url, cached).await;
+
+        let links = match fetch_result {
+            FetchResult::Fetched {
+                html,
+                etag,
+                last_modified,
+            } => {
+                pages_fetched += 1;
+                let links = parse_pypi_index(&html);
+                cache.insert(
+                    relative_path.clone(),
+                    CachedPage {
+                        etag,
+                        last_modified,
+                        links: links.clone(),
+                    },
+                );
+                links
+            }
+            FetchResult::NotModified => {
+                // Use cached links, no need to re-parse
+                if let Some(cached) = cache.get(&relative_path) {
+                    cached.links.clone()
+                } else {
+                    continue;
+                }
+            }
+            FetchResult::Error(e) => {
+                warn!("Failed to fetch {}: {:?}", relative_path, e);
+                continue;
+            }
+        };
+
+        // Queue child links if we haven't reached max depth
+        if depth < config.max_depth {
+            for link in &links {
+                if is_largefile_link(link) {
+                    continue;
+                }
+                if let Some((rel_path, abs_url)) = resolve_child_url(&root_url, &page_url, link)
+                    && seen_pages.insert(rel_path.clone())
+                {
+                    queue.push_back((rel_path, abs_url, depth + 1));
+                }
+            }
+        }
+    }
+
+    debug!(
+        "Index crawl complete: {} pages fetched, {} pages cached",
+        pages_fetched,
+        cache.pages.len()
+    );
+
+    Ok(cache.valid_pages())
 }
 
 // pytorch-wheels
-
-const PYPI_INDEX_REFRESH_SECS: u64 = 300;
 
 pub struct PypiIndexState {
     pub entries: RwLock<Vec<String>>, // Sorted list of relative paths to index pages.
@@ -217,23 +414,20 @@ fn normalize_pypi_index(mut index: Vec<String>) -> Vec<String> {
 }
 
 fn apply_pypi_index_update(index: Vec<String>, index_state: &'static PypiIndexState) {
-    // Incremental update: only append newly discovered pages to in-memory index.
+    // Replace in-memory index with the latest upstream snapshot.
     let mut entries = index_state
         .entries
         .write()
         .expect("PyPI index lock poisoned");
-    let mut merged = entries.clone();
-    merged.extend(index);
-    let merged = normalize_pypi_index(merged);
 
-    if merged == *entries {
+    if *entries == index {
         return;
     }
 
-    *entries = merged;
+    *entries = index;
 }
 
-pub fn schedule_wheels_index_worker(endpoint: String, index_state: &'static PypiIndexState) {
+pub fn schedule_wheels_index_worker(config: &Config, index_state: &'static PypiIndexState) {
     if index_state
         .worker_started
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -242,13 +436,32 @@ pub fn schedule_wheels_index_worker(endpoint: String, index_state: &'static Pypi
         return;
     }
 
+    let endpoint = config.endpoints.pytorch_wheels.clone();
+    let pypi_config = config.pypi_index.clone();
+    let timeout_secs = config.download_timeout.min(pypi_config.fetch_timeout_secs);
+    let client = match reqwest::ClientBuilder::new()
+        .user_agent(&config.user_agent)
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            warn!("Failed to create PyPI index client: {:?}", err);
+            index_state.worker_started.store(false, Ordering::Release);
+            return;
+        }
+    };
+
     tokio::spawn(async move {
-        let mut refresh = tokio::time::interval(Duration::from_secs(PYPI_INDEX_REFRESH_SECS));
+        let mut refresh = tokio::time::interval(Duration::from_secs(pypi_config.refresh_secs));
         refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        // Persistent cache for conditional requests across refresh cycles
+        let mut cache = PypiIndexCache::new();
 
         loop {
             refresh.tick().await;
-            match fetch_pypi_index(&endpoint).await {
+            match fetch_pypi_index_cached(&client, &endpoint, &mut cache, &pypi_config).await {
                 Ok(index) => {
                     let normalized = normalize_pypi_index(index);
                     apply_pypi_index_update(normalized, index_state);
@@ -411,9 +624,15 @@ mod tests {
             })
             .await;
 
-        let index_pages = fetch_pypi_index(&(server.base_url() + "/whl"))
-            .await
-            .unwrap();
+        let client = Client::new();
+        let index_pages = fetch_pypi_index_cached(
+            &client,
+            &(server.base_url() + "/whl"),
+            &mut PypiIndexCache::new(),
+            &PypiIndexConfig::default(),
+        )
+        .await
+        .unwrap();
 
         let expected: HashSet<&str> = ["torch", "cu130", "cu130/torch"].into_iter().collect();
         let actual: HashSet<&str> = index_pages.iter().map(|s| s.as_str()).collect();
@@ -424,5 +643,226 @@ mod tests {
         torch.assert_calls_async(1).await;
         cu130.assert_calls_async(1).await;
         cu130_torch.assert_calls_async(1).await;
+    }
+
+    #[test]
+    fn test_apply_pypi_index_update_replaces_entries() {
+        let index_state: &'static PypiIndexState = Box::leak(Box::new(PypiIndexState::default()));
+
+        apply_pypi_index_update(vec!["cu130".to_string(), "torch".to_string()], index_state);
+        apply_pypi_index_update(vec!["torch".to_string()], index_state);
+
+        let entries = index_state
+            .entries
+            .read()
+            .expect("PyPI index lock poisoned");
+        assert_eq!(entries.as_slice(), ["torch"]);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_pypi_index_cached_respects_depth_limit() {
+        use httpmock::Method::GET;
+        use httpmock::MockServer;
+
+        // depth 3 content that should NOT be fetched with max_depth=2
+        const DEEP_PAGE: &str =
+            r#"<!DOCTYPE html><html><body><a href="deep.whl">deep.whl</a></body></html>"#;
+
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/whl");
+                then.status(200).body(ROOT_FIXTURE.as_str());
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/whl/torch/");
+                then.status(200).body(
+                    r#"<!DOCTYPE html><html><body><a href="file.whl">file</a></body></html>"#,
+                );
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/whl/cu130/");
+                then.status(200).body(CU130_FIXTURE.as_str());
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/whl/cu130/torch/");
+                // Has a subdir link
+                then.status(200).body(
+                    r#"<!DOCTYPE html><html><body><a href="subdir/">subdir</a></body></html>"#,
+                );
+            })
+            .await;
+        let deep_mock = server
+            .mock_async(|when, then| {
+                // This is depth 3 - should NOT be fetched with max_depth=2
+                when.method(GET).path("/whl/cu130/torch/subdir/");
+                then.status(200).body(DEEP_PAGE);
+            })
+            .await;
+
+        let client = Client::new();
+        let mut cache = PypiIndexCache::new();
+        let config = PypiIndexConfig {
+            max_depth: 2,
+            max_pages: 1000,
+            ..Default::default()
+        };
+
+        let _pages =
+            fetch_pypi_index_cached(&client, &(server.base_url() + "/whl"), &mut cache, &config)
+                .await
+                .unwrap();
+
+        // Verify the deep page was NOT fetched
+        deep_mock.assert_calls_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_pypi_index_cached_conditional_request() {
+        use httpmock::Method::GET;
+        use httpmock::MockServer;
+
+        let server = MockServer::start_async().await;
+
+        // First request returns content with ETag
+        let root_mock = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/whl");
+                then.status(200)
+                    .header("ETag", "\"abc123\"")
+                    .body(r#"<!DOCTYPE html><html><body><a href="pkg/">pkg</a></body></html>"#);
+            })
+            .await;
+
+        let pkg_mock = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/whl/pkg/");
+                then.status(200).header("ETag", "\"pkg456\"").body(
+                    r#"<!DOCTYPE html><html><body><a href="file.whl">file</a></body></html>"#,
+                );
+            })
+            .await;
+
+        let client = Client::new();
+        let mut cache = PypiIndexCache::new();
+        let config = PypiIndexConfig::default();
+
+        // First fetch - populates cache
+        let pages =
+            fetch_pypi_index_cached(&client, &(server.base_url() + "/whl"), &mut cache, &config)
+                .await
+                .unwrap();
+
+        assert_eq!(pages, vec!["pkg"]);
+        root_mock.assert_calls_async(1).await;
+        pkg_mock.assert_calls_async(1).await;
+
+        // Verify cache has ETag stored
+        let cached_pkg = cache.get("pkg").unwrap();
+        assert_eq!(cached_pkg.etag, Some("\"pkg456\"".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_pypi_index_cached_304_not_modified() {
+        use httpmock::Method::GET;
+        use httpmock::MockServer;
+
+        let server = MockServer::start_async().await;
+
+        // Create mocks that return 304 for conditional requests
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/whl");
+                then.status(200)
+                    .header("ETag", "\"root-etag\"")
+                    .body(r#"<!DOCTYPE html><html><body><a href="pkg/">pkg</a></body></html>"#);
+            })
+            .await;
+
+        // For pkg/, first return 200, then check for conditional header
+        let pkg_initial = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/whl/pkg/")
+                    .header_missing("If-None-Match");
+                then.status(200).header("ETag", "\"pkg-etag\"").body(
+                    r#"<!DOCTYPE html><html><body><a href="file.whl">file</a></body></html>"#,
+                );
+            })
+            .await;
+
+        let pkg_conditional = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/whl/pkg/")
+                    .header("If-None-Match", "\"pkg-etag\"");
+                then.status(304); // Not Modified
+            })
+            .await;
+
+        let client = Client::new();
+        let mut cache = PypiIndexCache::new();
+        let config = PypiIndexConfig::default();
+
+        // First fetch
+        fetch_pypi_index_cached(&client, &(server.base_url() + "/whl"), &mut cache, &config)
+            .await
+            .unwrap();
+
+        pkg_initial.assert_calls_async(1).await;
+        pkg_conditional.assert_calls_async(0).await;
+
+        // Second fetch - should use conditional request
+        let pages =
+            fetch_pypi_index_cached(&client, &(server.base_url() + "/whl"), &mut cache, &config)
+                .await
+                .unwrap();
+
+        assert_eq!(pages, vec!["pkg"]);
+        pkg_conditional.assert_calls_async(1).await;
+    }
+
+    #[test]
+    fn test_pypi_index_cache_valid_pages() {
+        let mut cache = PypiIndexCache::new();
+
+        // Empty path should not be included
+        cache.insert(
+            String::new(),
+            CachedPage {
+                etag: None,
+                last_modified: None,
+                links: vec!["something".to_string()],
+            },
+        );
+
+        // Path with links should be included
+        cache.insert(
+            "torch".to_string(),
+            CachedPage {
+                etag: Some("etag".to_string()),
+                last_modified: None,
+                links: vec!["file.whl".to_string()],
+            },
+        );
+
+        // Path with no links should not be included
+        cache.insert(
+            "empty".to_string(),
+            CachedPage {
+                etag: None,
+                last_modified: None,
+                links: vec![],
+            },
+        );
+
+        let valid = cache.valid_pages();
+        assert_eq!(valid, vec!["torch"]);
     }
 }

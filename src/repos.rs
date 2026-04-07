@@ -38,6 +38,7 @@ pub fn simple_intel(
             };
 
             // Redirect (307) to upstream if any query param exists.
+            // NOTE: use 302 instead of 307
             if let Some(query) = uri.query() {
                 return Ok::<_, Error>(
                     Redirect::Temporary(format!("{}?{}", task.upstream_url(), query)).into(),
@@ -58,6 +59,7 @@ pub fn simple_intel(
             }
 
             // Redirect (308) to upstream if the path is filtered out.
+            // NOTE: use 301 instead of 308
             if !filter(&config, &task.path) {
                 return Ok(Redirect::Permanent(task.upstream_url().to_string()).into());
             }
@@ -178,23 +180,15 @@ pub fn linuxbrew_allow(_config: &Config, path: &str) -> bool {
     path.contains(".x86_64_linux")
 }
 
-pub fn wheels_proxy(config: &Config, path: &str) -> bool {
-    pub static PYTORCH_WHEELS_INDEX_STATE: LazyLock<PypiIndexState> =
-        LazyLock::new(PypiIndexState::default);
+static PYTORCH_WHEELS_INDEX_STATE: LazyLock<PypiIndexState> =
+    LazyLock::new(PypiIndexState::default);
 
+pub fn wheels_proxy(config: &Config, path: &str) -> bool {
     if path.ends_with(".html") {
         return true;
     }
 
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    if !leaf.contains(".whl") {
-        return true;
-    }
-
-    schedule_wheels_index_worker(
-        config.endpoints.pytorch_wheels.clone(),
-        &PYTORCH_WHEELS_INDEX_STATE,
-    );
+    schedule_wheels_index_worker(config, &PYTORCH_WHEELS_INDEX_STATE);
 
     let normalized_path = path.trim_end_matches('/');
     let index = PYTORCH_WHEELS_INDEX_STATE
@@ -839,8 +833,6 @@ mod tests {
     async fn test_proxy_head_wheels_index_path() {
         // Ensure dynamic index entries are proxied before filter redirect.
         {
-            pub static PYTORCH_WHEELS_INDEX_STATE: LazyLock<PypiIndexState> =
-                LazyLock::new(PypiIndexState::default);
             let mut entries = PYTORCH_WHEELS_INDEX_STATE
                 .entries
                 .write()
