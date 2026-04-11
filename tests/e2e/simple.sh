@@ -76,6 +76,7 @@ assert-status GET "$base_url/pytorch-wheels/" 200
 assert-body-contains "$base_url/pytorch-wheels/" "No route for pytorch-wheels."
 
 assert-status HEAD "$base_url/pytorch-wheels/torch/" 200
+assert-body-contains "$base_url/pytorch-wheels/torch/" "cu130"
 
 assert-status GET "$base_url/pytorch-wheels/torch/?mirror_intel_e2e=1" 302
 assert-location \
