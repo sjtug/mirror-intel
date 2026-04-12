@@ -46,3 +46,26 @@ serial_test = "3"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
+
+[profile.dev]
+opt-level = 0
+debug = 0
+lto = false
+codegen-units = 256
+incremental = true
+panic = 'unwind'
+debug-assertions = true
+overflow-checks = true
+rpath = false
+
+[profile.release]
+#strip = "symbols"
+opt-level = "z"          # optimize for size
+debug = false
+lto = "thin"
+codegen-units = 1
+incremental = false
+panic = "abort"
+debug-assertions = false
+overflow-checks = false
+#rpath = false
