@@ -49,7 +49,7 @@
           ...
         }:
         let
-          inherit (pkgs) gcc pkgsStatic;
+          inherit (pkgs) stdenv pkgsStatic;
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (p: p.rustToolchain);
 
           craneAttrs = import ./nix/crane.nix { inherit craneLib pkgs lib; };
@@ -60,12 +60,23 @@
             mergeCraneArgs
             ;
 
+          defaultTarget = stdenv.hostPlatform.config;
+          muslTarget =
+            {
+              "x86_64-linux" = "x86_64-unknown-linux-musl";
+              "aarch64-linux" = "aarch64-unknown-linux-musl";
+              "aarch64-darwin" = "aarch64-apple-darwin-musl";
+            }
+            .${system};
+
           # Build the actual crate itself, reusing the dependency
           # artifacts from above.
           my-crate = craneLib.buildPackage (
             commonArgs
             // {
               inherit cargoArtifacts;
+              CARGO_PROFILE = "dev";
+              CARGO_BUILD_TARGET = defaultTarget;
             }
           );
 
@@ -73,15 +84,16 @@
             mergeCraneArgs commonArgs {
               nativeBuildInputs = [
                 # Required by aws-lc-sys
-                gcc
+                stdenv.cc
                 pkgsStatic.stdenv.cc
               ];
-              # Cross compile with musl
-              CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+              CARGO_PROFILE = "release";
+              CARGO_BUILD_TARGET = muslTarget;
+              CARGO_BUILD_FLAGS = "-C target-feature=+crt-static";
             }
           );
 
-          E2ETests = import ./tests/e2e {
+          e2eTests = import ./tests/e2e {
             inherit pkgs my-crate;
           };
         in
@@ -196,7 +208,7 @@
             );
           }
           // {
-            inherit (E2ETests) e2e-simple;
+            inherit (e2eTests) e2e-simple;
           };
 
           devShells.default = craneLib.devShell {
