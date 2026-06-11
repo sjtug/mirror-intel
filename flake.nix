@@ -77,6 +77,7 @@
               inherit cargoArtifacts;
               CARGO_PROFILE = "dev";
               CARGO_BUILD_TARGET = defaultTarget;
+              buildInputs = [ pkgs.rust-jemalloc-sys ];
             }
           );
 
@@ -87,6 +88,7 @@
                 stdenv.cc
                 pkgsStatic.stdenv.cc
               ];
+              buildInputs = [ pkgsStatic.rust-jemalloc-sys ];
               CARGO_PROFILE = "release";
               CARGO_BUILD_TARGET = muslTarget;
               CARGO_BUILD_FLAGS = "-C target-feature=+crt-static";
@@ -232,7 +234,7 @@
                 cargo-bloat
                 # cargo-license
                 # cargo-nextest
-                cargo-outdated
+                # cargo-outdated
                 # cargo-show-asm
                 # samply
                 # watchexec
