@@ -6,18 +6,26 @@ use regex::Regex;
 
 use crate::error::Result;
 use crate::intel_path::IntelPath;
-use crate::pypi_index::{PypiIndexState, schedule_wheels_index_worker};
 use crate::{
     Error,
     common::{Config, Endpoints, IntelMission, IntelResponse, Redirect, Task},
     utils,
 };
 
+/// Routing decision returned by a `classify` closure in [`simple_intel`].
+pub enum RouteAction {
+    /// Reverse-proxy the request to upstream.
+    Proxy,
+    /// Follow the smart-cache strategy (redirect HEAD, stream or cache GET).
+    Cache,
+    /// Permanently redirect (301) to the upstream URL.
+    Redirect,
+}
+
 pub fn simple_intel(
     origin_injection: impl FnMut(&Endpoints) -> &str + Clone + Send + Sync + 'static,
     route: &'static str,
-    filter: impl FnMut(&Config, &str) -> bool + Clone + Send + 'static,
-    proxy: impl FnMut(&Config, &str) -> bool + Clone + Send + 'static,
+    classify: impl FnMut(&Config, &str) -> RouteAction + Clone + Send + 'static,
 ) -> Route {
     let handler = move |path: IntelPath,
                         method: Method,
@@ -25,8 +33,7 @@ pub fn simple_intel(
                         intel_mission: web::Data<IntelMission>,
                         config: web::Data<Config>| {
         let mut origin_injection = origin_injection.clone();
-        let mut filter = filter.clone();
-        let mut proxy = proxy.clone();
+        let mut classify = classify.clone();
         async move {
             let origin = origin_injection(&config.endpoints).to_string();
             let path = path.to_string();
@@ -45,38 +52,40 @@ pub fn simple_intel(
                 );
             }
 
-            // Proxy if the path is proxied.
-            if proxy(&config, &task.path) {
-                let resp = if method == Method::HEAD {
-                    HttpResponse::Ok().finish().into()
-                } else {
-                    task.resolve_upstream()
-                        .reverse_proxy(&intel_mission)
-                        .await?
-                        .into()
-                };
-                return Ok(resp);
+            match classify(&config, &task.path) {
+                RouteAction::Proxy => {
+                    let resp = if method == Method::HEAD {
+                        HttpResponse::Ok().finish().into()
+                    } else {
+                        task.resolve_upstream()
+                            .reverse_proxy(&intel_mission)
+                            .await?
+                            .into()
+                    };
+                    Ok(resp)
+                }
+                RouteAction::Cache => {
+                    let resp = if method == Method::HEAD {
+                        task.resolve_no_content(&intel_mission, &config)
+                            .await?
+                            .redirect(&config)
+                            .into()
+                    } else {
+                        task.resolve(&intel_mission, &config)
+                            .await?
+                            .stream_small_cached(
+                                config.direct_stream_size_kb,
+                                &intel_mission,
+                                &config,
+                            )
+                            .await?
+                    };
+                    Ok(resp)
+                }
+                RouteAction::Redirect => {
+                    Ok(Redirect::Permanent(task.upstream_url().to_string()).into())
+                }
             }
-
-            // Redirect (308) to upstream if the path is filtered out.
-            // NOTE: use 301 instead of 308
-            if !filter(&config, &task.path) {
-                return Ok(Redirect::Permanent(task.upstream_url().to_string()).into());
-            }
-
-            // Otherwise, follow smart cache strategy.
-            let resp = if method == Method::HEAD {
-                task.resolve_no_content(&intel_mission, &config)
-                    .await?
-                    .redirect(&config)
-                    .into()
-            } else {
-                task.resolve(&intel_mission, &config)
-                    .await?
-                    .stream_small_cached(config.direct_stream_size_kb, &intel_mission, &config)
-                    .await?
-            };
-            Ok(resp)
         }
     };
     // Route with handler for GET and HEAD, otherwise 404
@@ -85,12 +94,60 @@ pub fn simple_intel(
         .to(handler)
 }
 
-pub const fn disallow_all(_config: &Config, _path: &str) -> bool {
-    false
+/// Classify every path as [`RouteAction::Cache`].
+///
+/// Use as the `classify` argument for routes where all requests follow the
+/// smart-cache strategy.
+pub fn classify_cache_all(_config: &Config, _path: &str) -> RouteAction {
+    RouteAction::Cache
 }
 
-pub const fn allow_all(_config: &Config, _path: &str) -> bool {
-    true
+/// Convert a boolean filter into a `classify` closure.
+///
+/// Paths that pass the filter get [`RouteAction::Cache`];
+/// all others get [`RouteAction::Redirect`].
+pub fn classify_with(
+    mut filter: impl FnMut(&Config, &str) -> bool + Clone + Send + 'static,
+) -> impl FnMut(&Config, &str) -> RouteAction + Clone + Send + 'static {
+    move |config: &Config, path: &str| {
+        if filter(config, path) {
+            RouteAction::Cache
+        } else {
+            RouteAction::Redirect
+        }
+    }
+}
+
+/// Classify paths for the pytorch-wheels route.
+///
+/// * `.html` files → [`RouteAction::Proxy`]  (reverse-proxy upstream for freshness)
+/// * `.whl` files and `#sha256=` fragment links → [`RouteAction::Cache`]
+/// * source archives (`.tar.gz`, `.zip`, `.exe`) → [`RouteAction::Redirect`]
+/// * everything else → [`RouteAction::Cache`]
+///
+/// Directory index pages and unknown paths all use the smart-cache strategy:
+/// HEAD requests are redirected to upstream (cheap revalidation), while GET
+/// requests are resolved through `stream_small_cached` (small HTML listings get
+/// cached, large wheel files are streamed through).
+pub fn wheels_route_classify(_config: &Config, path: &str) -> RouteAction {
+    if path.ends_with(".html") {
+        return RouteAction::Proxy;
+    }
+
+    // Source archives and Windows installers — redirect to upstream.
+    if path.ends_with(".tar.gz") || path.ends_with(".zip") || path.ends_with(".exe") {
+        return RouteAction::Redirect;
+    }
+
+    if let Some((wheel_path, sha256)) = path.split_once("#sha256=")
+        && wheel_path.ends_with(".whl")
+        && sha256.len() == 64
+        && sha256.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return RouteAction::Cache;
+    }
+
+    RouteAction::Cache
 }
 
 pub fn ostree_allow(_config: &Config, path: &str) -> bool {
@@ -109,16 +166,6 @@ pub fn rust_static_allow(_config: &Config, path: &str) -> bool {
     }
 
     true
-}
-
-pub fn wheels_allow(_config: &Config, path: &str) -> bool {
-    if let Some((wheel_path, sha256)) = path.split_once("#sha256=") {
-        return wheel_path.ends_with(".whl")
-            && sha256.len() == 64
-            && sha256.chars().all(|c| c.is_ascii_hexdigit());
-    }
-
-    path.ends_with(".whl") || path.ends_with(".html")
 }
 
 pub fn github_release_allow(config: &Config, path: &str) -> bool {
@@ -180,30 +227,6 @@ pub fn linuxbrew_allow(_config: &Config, path: &str) -> bool {
     path.contains(".x86_64_linux")
 }
 
-static PYTORCH_WHEELS_INDEX_STATE: LazyLock<PypiIndexState> =
-    LazyLock::new(PypiIndexState::default);
-
-pub fn wheels_proxy(config: &Config, path: &str) -> bool {
-    if path.ends_with(".html") {
-        return true;
-    }
-
-    schedule_wheels_index_worker(config, &PYTORCH_WHEELS_INDEX_STATE);
-
-    let normalized_path = path.trim_end_matches('/');
-    let index = PYTORCH_WHEELS_INDEX_STATE
-        .entries
-        .read()
-        .expect("wheels index lock poisoned");
-    index
-        .iter()
-        .any(|entry| normalized_path.ends_with(entry.trim_end_matches('/')))
-}
-
-// pub fn wheels_proxy(path: &str) -> bool {
-//     path.ends_with(".html")
-// }
-
 pub fn gradle_allow(_config: &Config, path: &str) -> bool {
     path.ends_with(".zip")
 }
@@ -212,41 +235,34 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
     config
         .route(
             "/crates.io/{path:.+}",
-            simple_intel(|c| &c.crates_io, "crates.io", allow_all, disallow_all),
+            simple_intel(|c| &c.crates_io, "crates.io", classify_cache_all),
         )
         .route(
             "/flathub/{path:.+}",
-            simple_intel(|c| &c.flathub, "flathub", ostree_allow, disallow_all),
+            simple_intel(|c| &c.flathub, "flathub", classify_with(ostree_allow)),
         )
         .route(
             "/fedora-ostree/{path:.+}",
             simple_intel(
                 |c| &c.fedora_ostree,
                 "fedora-ostree",
-                ostree_allow,
-                disallow_all,
+                classify_with(ostree_allow),
             ),
         )
         .route(
             "/fedora-iot/{path:.+}",
-            simple_intel(|c| &c.fedora_iot, "fedora-iot", ostree_allow, disallow_all),
+            simple_intel(|c| &c.fedora_iot, "fedora-iot", classify_with(ostree_allow)),
         )
         .route(
             "/pypi-packages/{path:.+}",
-            simple_intel(
-                |c| &c.pypi_packages,
-                "pypi-packages",
-                allow_all,
-                disallow_all,
-            ),
+            simple_intel(|c| &c.pypi_packages, "pypi-packages", classify_cache_all),
         )
         .route(
             "/homebrew-bottles/{path:.+}",
             simple_intel(
                 |c| &c.homebrew_bottles,
                 "homebrew-bottles",
-                allow_all,
-                disallow_all,
+                classify_cache_all,
             ),
         )
         .route(
@@ -254,8 +270,7 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
             simple_intel(
                 |c| &c.linuxbrew_bottles,
                 "linuxbrew-bottles",
-                linuxbrew_allow,
-                disallow_all,
+                classify_with(linuxbrew_allow),
             ),
         )
         .route(
@@ -263,8 +278,7 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
             simple_intel(
                 |c| &c.rust_static,
                 "rust-static",
-                rust_static_allow,
-                disallow_all,
+                classify_with(rust_static_allow),
             ),
         )
         .route(
@@ -272,8 +286,7 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
             simple_intel(
                 |c| &c.pytorch_wheels,
                 "pytorch-wheels",
-                wheels_allow,
-                wheels_proxy,
+                wheels_route_classify,
             ),
         )
         .route(
@@ -281,8 +294,7 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
             simple_intel(
                 |c| &c.sjtug_internal,
                 "sjtug-internal",
-                sjtug_internal_allow,
-                disallow_all,
+                classify_with(sjtug_internal_allow),
             ),
         )
         .route(
@@ -290,8 +302,7 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
             simple_intel(
                 |c| &c.flutter_infra,
                 "flutter_infra",
-                flutter_allow,
-                disallow_all,
+                classify_with(flutter_allow),
             ),
         )
         .route(
@@ -299,8 +310,7 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
             simple_intel(
                 |c| &c.flutter_infra_release,
                 "flutter_infra_release",
-                flutter_allow,
-                disallow_all,
+                classify_with(flutter_allow),
             ),
         )
         .route(
@@ -308,21 +318,19 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
             simple_intel(
                 |c| &c.github_release,
                 "github-release",
-                github_release_allow,
-                disallow_all,
+                classify_with(github_release_allow),
             ),
         )
         .route(
             "/opam-cache/{path:.+}",
-            simple_intel(|c| &c.opam_cache, "opam-cache", allow_all, disallow_all),
+            simple_intel(|c| &c.opam_cache, "opam-cache", classify_cache_all),
         )
         .route(
             "/gradle/distribution/{path:.+}",
             simple_intel(
                 |c| &c.gradle_distribution,
                 "gradle/distributions",
-                gradle_allow,
-                disallow_all,
+                classify_with(gradle_allow),
             ),
         )
         .route("/dart-pub/{path:.+}", web::get().to(dart_pub))
@@ -566,8 +574,7 @@ mod tests {
                 simple_intel(
                     |c| &c.pytorch_wheels,
                     "pytorch-wheels",
-                    wheels_allow,
-                    wheels_proxy,
+                    wheels_route_classify,
                 ),
             )
             .route(
@@ -575,8 +582,7 @@ mod tests {
                 simple_intel(
                     |c| &c.sjtug_internal,
                     "sjtug-internal",
-                    sjtug_internal_allow,
-                    disallow_all,
+                    classify_with(sjtug_internal_allow),
                 ),
             )
             .route("/{path:.+}", web::get().to(index))
@@ -772,24 +778,62 @@ mod tests {
     }
 
     #[test]
-    fn test_wheels_allow() {
+    fn test_wheels_route_classify() {
         let config = Config::default();
-        assert!(wheels_allow(&config, "torch_stable.html"));
-        assert!(wheels_allow(
-            &config,
-            "torch-2.0.0-cp311-cp311-manylinux.whl"
+        // .html files are proxied
+        assert!(matches!(
+            wheels_route_classify(&config, "torch_stable.html"),
+            RouteAction::Proxy
         ));
-        assert!(!wheels_allow(
-            &config,
-            "torch-2.0.0-cp311-cp311-manylinux.whl#sha256=0123456789abcdef",
+        // .whl files are cached
+        assert!(matches!(
+            wheels_route_classify(&config, "torch-2.0.0-cp311-cp311-manylinux.whl"),
+            RouteAction::Cache
         ));
-        assert!(wheels_allow(
-            &config,
-            "cpu/torch-2.11.0%2Bcpu-cp314-cp314t-manylinux_2_28_x86_64.whl",
+        // Invalid #sha256 fragment → Cache (smart cache handles unknown paths)
+        assert!(matches!(
+            wheels_route_classify(
+                &config,
+                "torch-2.0.0-cp311-cp311-manylinux.whl#sha256=0123456789abcdef"
+            ),
+            RouteAction::Cache
         ));
-        assert!(wheels_allow(
-            &config,
-            "cu130/torch-2.11.0%2Bcu130-cp314-cp314t-manylinux_2_28_x86_64.whl",
+        // Valid .whl with hash → cache
+        assert!(matches!(
+            wheels_route_classify(
+                &config,
+                "cpu/torch-2.11.0%2Bcpu-cp314-cp314t-manylinux_2_28_x86_64.whl"
+            ),
+            RouteAction::Cache
+        ));
+        assert!(matches!(
+            wheels_route_classify(
+                &config,
+                "cu130/torch-2.11.0%2Bcu130-cp314-cp314t-manylinux_2_28_x86_64.whl"
+            ),
+            RouteAction::Cache
+        ));
+        // Source archives and installers → redirect to upstream
+        assert!(matches!(
+            wheels_route_classify(&config, "torch-2.0.0.tar.gz"),
+            RouteAction::Redirect
+        ));
+        assert!(matches!(
+            wheels_route_classify(&config, "torch-2.0.0.zip"),
+            RouteAction::Redirect
+        ));
+        assert!(matches!(
+            wheels_route_classify(&config, "torch-2.0.0-cp311-cp311-win_amd64.exe"),
+            RouteAction::Redirect
+        ));
+        // Unknown paths (directory indexes, etc.) → Cache (smart cache strategy)
+        assert!(matches!(
+            wheels_route_classify(&config, "torch"),
+            RouteAction::Cache
+        ));
+        assert!(matches!(
+            wheels_route_classify(&config, "cu130/torch"),
+            RouteAction::Cache
         ));
     }
 
@@ -820,35 +864,6 @@ mod tests {
             path: "torch_stable.html".to_string(),
             retry_limit: 3,
         };
-        let req = TestRequest::default()
-            .method(Method::HEAD)
-            .uri(object.root_path().as_str())
-            .to_request();
-        let resp = call_service(&service, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[serial(cwd_env)]
-    #[tokio::test]
-    async fn test_proxy_head_wheels_index_path() {
-        // Ensure dynamic index entries are proxied before filter redirect.
-        {
-            let mut entries = PYTORCH_WHEELS_INDEX_STATE
-                .entries
-                .write()
-                .expect("wheels index lock poisoned");
-            entries.clear();
-            entries.push("torch/".to_string());
-        }
-
-        let (service, _, _rx, _server) = make_service().await;
-        let object = Task {
-            storage: "pytorch-wheels",
-            origin: "https://download.pytorch.org/whl".to_string(),
-            path: "torch".to_string(),
-            retry_limit: 3,
-        };
-
         let req = TestRequest::default()
             .method(Method::HEAD)
             .uri(object.root_path().as_str())

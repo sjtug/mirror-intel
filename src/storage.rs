@@ -2,7 +2,7 @@
 use std::time::Duration;
 
 use aws_sdk_s3::Client as S3Client;
-use aws_sdk_s3::config::Region;
+use aws_sdk_s3::config::{Region, RequestChecksumCalculation};
 use tokio::time::timeout;
 
 use crate::common::S3Config;
@@ -19,7 +19,8 @@ fn get_s3_client(s3_config: &S3Config) -> S3Client {
     let s3_builder = aws_sdk_s3::Config::builder()
         .region(s3_region(s3_config))
         .endpoint_url(s3_config.endpoint.clone())
-        .force_path_style(true);
+        .force_path_style(true)
+        .request_checksum_calculation(RequestChecksumCalculation::WhenRequired);
 
     S3Client::from_conf(s3_builder.build())
 }

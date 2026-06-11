@@ -225,49 +225,6 @@ pub struct GithubReleaseConfig {
     pub allow: Vec<String>,
 }
 
-/// Configuration for PyPI index page caching.
-#[derive(Clone, Deserialize, Debug, Eq, PartialEq)]
-pub struct PypiIndexConfig {
-    /// Refresh interval in seconds (default: 300).
-    #[serde(default = "PypiIndexConfig::default_refresh_secs")]
-    pub refresh_secs: u64,
-    /// Fetch timeout in seconds (default: 30).
-    #[serde(default = "PypiIndexConfig::default_fetch_timeout_secs")]
-    pub fetch_timeout_secs: u64,
-    /// Maximum BFS crawl depth (default: 2).
-    #[serde(default = "PypiIndexConfig::default_max_depth")]
-    pub max_depth: usize,
-    /// Maximum pages to fetch per crawl (default: 1000).
-    #[serde(default = "PypiIndexConfig::default_max_pages")]
-    pub max_pages: usize,
-}
-
-impl PypiIndexConfig {
-    fn default_refresh_secs() -> u64 {
-        300
-    }
-    fn default_fetch_timeout_secs() -> u64 {
-        30
-    }
-    fn default_max_depth() -> usize {
-        2
-    }
-    fn default_max_pages() -> usize {
-        1000
-    }
-}
-
-impl Default for PypiIndexConfig {
-    fn default() -> Self {
-        Self {
-            refresh_secs: Self::default_refresh_secs(),
-            fetch_timeout_secs: Self::default_fetch_timeout_secs(),
-            max_depth: Self::default_max_depth(),
-            max_pages: Self::default_max_pages(),
-        }
-    }
-}
-
 /// Global application config.
 #[derive(Default, Clone, Deserialize, Debug, Eq, PartialEq)]
 pub struct Config {
@@ -316,9 +273,6 @@ pub struct Config {
     pub buffer_path: PathBuf,
     /// Worker tasks to serve requests.
     pub workers: Option<usize>,
-    /// PyPI index caching configuration.
-    #[serde(default)]
-    pub pypi_index: PypiIndexConfig,
 }
 
 /// An empty redirect response to a given URL.
@@ -424,7 +378,7 @@ mod tests {
 
     use crate::Config;
     use crate::common::{
-        EndpointOverride, Endpoints, GithubReleaseConfig, PypiIndexConfig, S3Config, collect_config,
+        EndpointOverride, Endpoints, GithubReleaseConfig, S3Config, collect_config,
     };
 
     #[allow(clippy::result_large_err)]
@@ -479,12 +433,7 @@ mod tests {
                     ],
                     s3_only: vec!["voidlinux/".into()],
                 },
-                pypi_index: PypiIndexConfig {
-                    refresh_secs: 300,
-                    fetch_timeout_secs: 30,
-                    max_depth: 2,
-                    max_pages: 1000,
-                },
+
                 s3: S3Config {
                     name: "jCloud S3".into(),
                     endpoint: "https://s3.jcloud.sjtu.edu.cn".into(),
