@@ -5,7 +5,7 @@
   ...
 }:
 let
-  inherit (pkgs) cacert rust-jemalloc-sys;
+  inherit (pkgs) cacert;
 
   unfilteredRoot = ../.; # TODO: decouple with filepath
   src = lib.fileset.toSource {
@@ -22,8 +22,6 @@ let
     strictDeps = true;
 
     nativeBuildInputs = [ cacert ];
-
-    buildInputs = [ rust-jemalloc-sys ];
 
     doCheck = false; # Test separately with cargo-nextest
   };
