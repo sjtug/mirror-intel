@@ -35,7 +35,7 @@ impl Task {
                     tx.clone()
                         .send(self.clone())
                         .await
-                        .map_err(|_| Error::SendError(()))?;
+                        .map_err(|_| Error::Send)?;
                 }
                 Ok(IntelObject::Origin { task: self })
             }

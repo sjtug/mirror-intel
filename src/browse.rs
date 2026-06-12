@@ -66,7 +66,7 @@ pub async fn list(
             .send(),
     )
     .await
-    .map_err(|_| Error::Timeout(()))?;
+    .map_err(|_| Error::Timeout)?;
 
     if result.is_ok() {
         return Ok(Redirect::Permanent(format!("{}{}", real_endpoint, mirror_clone_list)).into());
@@ -85,7 +85,7 @@ pub async fn list(
             .send(),
     )
     .await
-    .map_err(|_| Error::Timeout(()))??;
+    .map_err(|_| Error::Timeout)??;
 
     let mut body = r#"<tr>
             <td><a href="..?mirror_intel_list">..</a></td>
