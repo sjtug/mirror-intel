@@ -21,6 +21,7 @@ bytes = "1.11"
 figment = { version = "0.10", features = ["toml"] }
 futures = "0.3"
 futures-util = "0.3"
+moka = { version = "0.12.15", features = ["future"] }
 percent-encoding = "2.1"
 prometheus = "0.14"
 regex = "1"

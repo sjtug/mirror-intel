@@ -9,6 +9,7 @@ use crate::intel_path::IntelPath;
 use crate::{
     Error,
     common::{Config, Endpoints, IntelMission, IntelResponse, Redirect, Task},
+    s3_cache::PreCacheStatus,
     utils,
 };
 
@@ -57,6 +58,7 @@ pub fn simple_intel(
             }
 
             match classify(&config, &task.path) {
+                // TODO: document
                 RouteAction::Proxy => {
                     let resp = if method == Method::HEAD {
                         HttpResponse::Ok().finish().into()
@@ -68,7 +70,18 @@ pub fn simple_intel(
                     };
                     Ok(resp)
                 }
+                // TODO: document
                 RouteAction::Cache => {
+                    if matches!(
+                        intel_mission
+                            .prefetch_cache
+                            .prefetch_cache_action(&task, &intel_mission, &config)
+                            .await,
+                        PreCacheStatus::None
+                    ) {
+                        return Ok(HttpResponse::NotFound().finish().into());
+                    }
+
                     let resp = if method == Method::HEAD {
                         task.resolve_no_content(&intel_mission, &config)
                             .await?
@@ -86,13 +99,14 @@ pub fn simple_intel(
                     };
                     Ok(resp)
                 }
+                // TODO: document
                 RouteAction::Redirect => {
                     Ok(Redirect::Permanent(task.upstream_url().to_string()).into())
                 }
             }
         }
     };
-    // Route with handler for GET and HEAD, otherwise 404
+    // Route with handler for GET and HEAD methods, otherwise 404
     web::route()
         .guard(guard::Any(guard::Get()).or(guard::Head()))
         .to(handler)
@@ -486,6 +500,7 @@ pub async fn index(path: IntelPath, config: web::Data<Config>) -> IntelResponse 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use actix_http::{Request, body};
     use actix_web::App;
@@ -503,6 +518,7 @@ mod tests {
     use url::Url;
 
     use crate::common::{Config, EndpointOverride, IntelMission, Metrics};
+    use crate::s3_cache::PrefetchCache;
     use crate::{list, not_found, queue_length, storage::get_anonymous_s3_client};
 
     use super::*;
@@ -526,15 +542,27 @@ mod tests {
                 .path("/bucket/sjtug-internal/mirror-clone/releases/download/v0.1.7/mirror-clone.tar.gz");
             then.status(200).body("");
         }).await;
+        let _mock_3 = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path("/mirror-clone/releases/download/v0.1.7/mirror-clone-2333.tar.gz");
+                then.status(200).body("");
+            })
+            .await;
+        let _mock_4 = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path("/mirror-clone/releases/download/v0.1.7/mirror%2B%2B%2B-clone.tar.gz");
+                then.status(200).body("");
+            })
+            .await;
+        let sjtug_internal = server.base_url();
         let figment = Figment::new()
             .join(("address", "127.0.0.1"))
             .join(("port", 8000))
             .join(("concurrent_download", 512))
             .join(("max_pending_task", 16384))
-            .join((
-                "endpoints",
-                map!["sjtug_internal" => "https://github.com/sjtug"],
-            ))
+            .join(("endpoints", map!["sjtug_internal" => sjtug_internal]))
             .join(("s3.name", "Placeholder S3"))
             .join(("s3.endpoint", server.base_url()))
             .join(("s3.website_endpoint", server.base_url()))
@@ -554,8 +582,13 @@ mod tests {
         let mission = IntelMission {
             tx: Some(tx),
             client,
+            prefetch_client: ClientBuilder::new()
+                .user_agent(&config.user_agent)
+                .build()
+                .unwrap(),
             metrics: Arc::new(Metrics::default()),
             s3_client: Arc::new(get_anonymous_s3_client(&config.s3)),
+            prefetch_cache: Arc::new(PrefetchCache::new(Duration::from_secs(60))),
         };
 
         let app = App::new()
@@ -621,6 +654,15 @@ mod tests {
         }
     }
 
+    fn upstream_url(task: &Task, config: &Config) -> Url {
+        Url::parse(&format!(
+            "{}/{}",
+            config.endpoints.sjtug_internal, task.path
+        ))
+        .expect("invalid test upstream url")
+    }
+
+    // NOTE: Set `#[serial(cwd_env)]` to avoid race condition between testcases
     #[rstest]
     #[case(
         Method::GET,
@@ -634,10 +676,20 @@ mod tests {
         StatusCode::MOVED_PERMANENTLY,
         Task::cached_url
     )]
-    #[case(Method::GET, missing_object(), StatusCode::FOUND, | o: & Task, _c: & Config | o.upstream_url())]
-    #[case(Method::HEAD, missing_object(), StatusCode::FOUND, | o: & Task, _c: & Config | o.upstream_url())]
-    #[case(Method::GET, forbidden_object(), StatusCode::MOVED_PERMANENTLY, | o: & Task, _c: & Config | o.upstream_url())]
-    #[case(Method::HEAD, forbidden_object(), StatusCode::MOVED_PERMANENTLY, | o: & Task, _c: & Config | o.upstream_url())]
+    #[case(Method::GET, missing_object(), StatusCode::FOUND, upstream_url)]
+    #[case(Method::HEAD, missing_object(), StatusCode::FOUND, upstream_url)]
+    #[case(
+        Method::GET,
+        forbidden_object(),
+        StatusCode::MOVED_PERMANENTLY,
+        upstream_url
+    )]
+    #[case(
+        Method::HEAD,
+        forbidden_object(),
+        StatusCode::MOVED_PERMANENTLY,
+        upstream_url
+    )]
     #[serial(cwd_env)]
     #[tokio::test]
     async fn test_get_head(
@@ -695,7 +747,7 @@ mod tests {
     #[tokio::test]
     async fn test_url_segment() {
         // this case is to test if we could process escaped URL correctly
-        let (service, _, _rx, _server) = make_service().await;
+        let (service, config, _rx, _server) = make_service().await;
         let object = Task {
             storage: "sjtug-internal",
             origin: "https://github.com/sjtug".to_string(),
@@ -710,7 +762,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::FOUND);
         assert_eq!(
             resp.headers().get("Location").unwrap().to_str().unwrap(),
-            object.upstream_url().as_str()
+            upstream_url(&object, &config).as_str()
         );
     }
 
@@ -737,7 +789,7 @@ mod tests {
     #[tokio::test]
     async fn test_url_segment_query() {
         // this case is to test if we could process escaped URL correctly
-        let (service, _, _rx, _server) = make_service().await;
+        let (service, config, _rx, _server) = make_service().await;
         let object = Task {
             storage: "sjtug-internal",
             origin: "https://github.com/sjtug".to_string(),
@@ -753,7 +805,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::FOUND);
         assert_eq!(
             resp.headers().get("Location").unwrap(),
-            object.upstream_url().as_str()
+            upstream_url(&object, &config).as_str()
         );
     }
 

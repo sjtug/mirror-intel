@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use url::Url;
 
+use crate::s3_cache::PrefetchCache;
 use crate::{Error, Result};
 
 /// A cache task.
@@ -149,12 +150,16 @@ pub struct IntelMission {
     pub tx: Option<Sender<Task>>,
     /// Reqwest client.
     pub client: Client,
+    /// Reqwest client for HEAD prefetch probes.
+    pub prefetch_client: Client,
     /// Prometheus metrics.
     pub metrics: Arc<Metrics>,
     /// S3 client.
     ///
     /// This is an anonymous client.
     pub s3_client: Arc<S3Client>,
+    /// Positive HEAD prefetch cache for `RouteAction::Cache`.
+    pub prefetch_cache: Arc<PrefetchCache>,
 }
 
 /// An upstream endpoint override rule.
@@ -273,6 +278,8 @@ pub struct Config {
     pub buffer_path: PathBuf,
     /// Worker tasks to serve requests.
     pub workers: Option<usize>,
+    /// TTL in seconds for positive S3/upstream HEAD prefetch entries.
+    pub head_prefetch_cache_ttl_secs: Option<u64>,
 }
 
 /// An empty redirect response to a given URL.
@@ -457,6 +464,7 @@ mod tests {
                 },
                 buffer_path: "/mnt/cache/".into(),
                 workers: None,
+                head_prefetch_cache_ttl_secs: None,
             };
             assert_eq!(config, expected);
             Ok(())

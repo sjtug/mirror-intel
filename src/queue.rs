@@ -41,6 +41,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use actix_http::Request;
     use actix_web::dev::{Service, ServiceResponse};
@@ -49,6 +50,7 @@ mod tests {
     use reqwest::Client;
 
     use crate::common::S3Config;
+    use crate::s3_cache::PrefetchCache;
     use crate::storage::get_anonymous_s3_client;
     use crate::{IntelMission, Metrics, queue_length};
 
@@ -59,8 +61,10 @@ mod tests {
         let mission = IntelMission {
             tx: None,
             client: Client::new(),
+            prefetch_client: Client::new(),
             metrics,
             s3_client: Arc::new(get_anonymous_s3_client(&s3_config)),
+            prefetch_cache: Arc::new(PrefetchCache::new(Duration::from_secs(60))),
         };
 
         let app = App::new()

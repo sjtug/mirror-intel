@@ -16,6 +16,7 @@ use common::{Config, IntelMission, Metrics};
 use error::{Error, Result};
 use queue::queue_length;
 use repos::{configure_repo_routes, index};
+use s3_cache::{PrefetchCache, default_head_prefetch_ttl};
 use storage::check_s3;
 use utils::not_found;
 
@@ -28,6 +29,7 @@ mod error;
 mod intel_path;
 mod queue;
 mod repos;
+mod s3_cache;
 mod storage;
 mod utils;
 
@@ -44,6 +46,7 @@ fn setup_log() -> impl Drop {
         .unwrap_or_default()
         .to_lowercase();
 
+    // TODO: simplify logic
     let (json, after) = match (rust_log_format.as_str(), cfg!(debug_assertions)) {
         ("plain", _) => (false, None),
         ("json", _) => (true, None),
@@ -133,12 +136,27 @@ async fn main() {
         .user_agent(&config.user_agent)
         .build()
         .unwrap();
+    let prefetch_client = ClientBuilder::new()
+        .user_agent(&config.user_agent)
+        .build()
+        .unwrap();
+    let head_prefetch_ttl = match config.head_prefetch_cache_ttl_secs {
+        Some(0) => {
+            warn!("head_prefetch_cache_ttl_secs must be greater than 0; using default");
+            default_head_prefetch_ttl()
+        }
+        Some(ttl) => std::time::Duration::from_secs(ttl),
+        None => default_head_prefetch_ttl(),
+    };
+    let prefetch_cache = Arc::new(PrefetchCache::new(head_prefetch_ttl));
 
     let mission = IntelMission {
         tx,
         client,
+        prefetch_client,
         metrics,
         s3_client: Arc::new(storage::get_anonymous_s3_client(&config.s3)),
+        prefetch_cache,
     };
 
     let addr = config.address.clone();
