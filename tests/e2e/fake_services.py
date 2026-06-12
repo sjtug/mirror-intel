@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 import signal
 import sys
 import threading
@@ -22,9 +22,23 @@ UPSTREAM_CU130_TORCH = (
     b"""<!DOCTYPE html><html><body>cu130 torch cached directory index"""
     b"""<a href="torch-0.0.1+cu130.whl">torch</a></body></html>"""
 )
+UPSTREAM_ONLY = b"upstream-only cache fixture"
 
 objects = {"sentinel": b"0"}
 objects_lock = threading.Lock()
+upstream_counts = {}
+upstream_counts_lock = threading.Lock()
+
+
+def record_upstream_request(method, path):
+    key = (method, path)
+    with upstream_counts_lock:
+        upstream_counts[key] = upstream_counts.get(key, 0) + 1
+
+
+def get_upstream_count(method, path):
+    with upstream_counts_lock:
+        return upstream_counts.get((method, path), 0)
 
 
 class QuietHandler(BaseHTTPRequestHandler):
@@ -48,18 +62,33 @@ class UpstreamHandler(QuietHandler):
         self.do_GET()
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/health":
             self.send_bytes(200, b"ok")
+        elif path == "/__count":
+            query = parse_qs(parsed.query)
+            method = query.get("method", [""])[0]
+            counted_path = query.get("path", [""])[0]
+            count = str(get_upstream_count(method, counted_path)).encode()
+            self.send_bytes(200, count, {"Content-Type": "text/plain"})
         elif path in ("/whl", "/whl/"):
+            record_upstream_request(self.command, "/whl")
             self.send_bytes(200, UPSTREAM_ROOT, {"Content-Type": "text/html"})
         elif path in ("/whl/cu130", "/whl/cu130/"):
+            record_upstream_request(self.command, "/whl/cu130")
             self.send_bytes(200, UPSTREAM_CU130, {"Content-Type": "text/html"})
         elif path in ("/whl/torch", "/whl/torch/"):
+            record_upstream_request(self.command, "/whl/torch")
             self.send_bytes(200, UPSTREAM_TORCH, {"Content-Type": "text/html"})
         elif path in ("/whl/cu130/torch", "/whl/cu130/torch/"):
+            record_upstream_request(self.command, "/whl/cu130/torch")
             self.send_bytes(200, UPSTREAM_CU130_TORCH, {"Content-Type": "text/html"})
+        elif path in ("/whl/upstream-only", "/whl/upstream-only/"):
+            record_upstream_request(self.command, "/whl/upstream-only")
+            self.send_bytes(200, UPSTREAM_ONLY, {"Content-Type": "text/plain"})
         else:
+            record_upstream_request(self.command, path)
             self.send_bytes(404, b"not found")
 
 

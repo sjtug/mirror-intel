@@ -5,7 +5,10 @@ wait-for-connection() {
 	local url="$1"
 	timeout 10s \
 		retry --until=success --delay "1" -- \
-		curl --silent --show-error --fail --output /dev/null "$url"
+		curl --silent --show-error --fail --output /dev/null "$url" || {
+			echo "FAIL wait-for-connection: url=$url" >&2
+			return 1
+		}
 }
 
 assert-status() {
@@ -20,10 +23,13 @@ assert-status() {
 			--request "$method" \
 			--output /dev/null \
 			--write-out '%{http_code}' \
-			"$url"
+			"$url" || true
 	)"
 
-	test "$status" = "$expected_status"
+	if test "$status" != "$expected_status"; then
+		echo "FAIL assert-status: method=$method url=$url expected=$expected_status actual=$status" >&2
+		return 1
+	fi
 }
 
 wait-for-status() {
@@ -48,7 +54,7 @@ wait-for-status() {
 			return 0
 		fi
 		if test "$SECONDS" -ge "$deadline"; then
-			echo "expected $method $url to return $expected_status, got $status" >&2
+			echo "FAIL wait-for-status: method=$method url=$url expected=$expected_status actual=$status" >&2
 			return 1
 		fi
 		sleep 1
@@ -59,7 +65,10 @@ assert-body-contains() {
 	local url="$1"
 	local expected_content="$2"
 
-	curl --silent --show-error "$url" | grep --fixed-strings --quiet -- "$expected_content"
+	if ! curl --silent --show-error "$url" | grep --fixed-strings --quiet -- "$expected_content"; then
+		echo "FAIL assert-body-contains: url=$url expected-substring=$expected_content" >&2
+		return 1
+	fi
 }
 
 wait-for-body-contains() {
@@ -73,7 +82,7 @@ wait-for-body-contains() {
 			return 0
 		fi
 		if test "$SECONDS" -ge "$deadline"; then
-			echo "expected $url body to contain $expected_content" >&2
+			echo "FAIL wait-for-body-contains: url=$url expected-substring=$expected_content" >&2
 			return 1
 		fi
 		sleep 1
@@ -90,10 +99,33 @@ assert-location() {
 			grep --ignore-case '^location:' |
 			head --lines 1 |
 			tr -d '\r' |
-			sed --quiet --expression 's/^[Ll]ocation: //p'
+			sed --quiet --expression 's/^[Ll]ocation: //p' || true
 	)"
 
-	test "$location" = "$expected_location"
+	if test "$location" != "$expected_location"; then
+		echo "FAIL assert-location: url=$url expected=$expected_location actual=$location" >&2
+		return 1
+	fi
+}
+
+assert-upstream-count() {
+	local method="$1"
+	local path="$2"
+	local expected_count="$3"
+	local count
+
+	count="$(
+		curl \
+			--silent --show-error --get \
+			--data-urlencode "method=$method" \
+			--data-urlencode "path=$path" \
+			"$upstream_url/__count" || true
+	)"
+
+	if test "$count" != "$expected_count"; then
+		echo "FAIL assert-upstream-count: method=$method path=$path expected=$expected_count actual=$count" >&2
+		return 1
+	fi
 }
 
 cleanup() {
@@ -195,6 +227,39 @@ assert-status GET "$base_url/pytorch-wheels/cu130/torch/" 200
 assert-body-contains "$base_url/pytorch-wheels/cu130/torch/" "cu130 torch cached directory index"
 assert-body-contains "$s3_url/bucket/pytorch-wheels/cu130/torch" "cu130 torch cached directory index"
 assert-status HEAD "$base_url/pytorch-wheels/cu130/torch/" 301
+
+# Cache-classified paths should be guarded by HEAD prefetch before the existing
+# smart-cache path is allowed to enqueue downloads or redirect to upstream.
+assert-status GET "$base_url/pytorch-wheels/missing-cache-path/" 404
+assert-upstream-count HEAD "/whl/missing-cache-path" 1
+assert-upstream-count GET "/whl/missing-cache-path" 0
+
+assert-status GET "$base_url/pytorch-wheels/upstream-only/" 302
+assert-location \
+	"$base_url/pytorch-wheels/upstream-only/" \
+	"$upstream_url/whl/upstream-only"
+assert-upstream-count HEAD "/whl/upstream-only" 1
+wait-for-body-contains "$s3_url/bucket/pytorch-wheels/upstream-only" "upstream-only cache fixture"
+
+# Query-string requests intentionally bypass classification and cache prefetch.
+assert-status GET "$base_url/pytorch-wheels/missing-query/?mirror_intel_e2e=1" 302
+assert-location \
+	"$base_url/pytorch-wheels/missing-query/?mirror_intel_e2e=1" \
+	"$upstream_url/whl/missing-query?mirror_intel_e2e=1"
+assert-upstream-count HEAD "/whl/missing-query" 0
+assert-upstream-count GET "/whl/missing-query" 0
+
+# Redirect-classified paths remain unconditional upstream redirects.
+assert-status GET "$base_url/pytorch-wheels/missing-redirect.tar.gz" 301
+assert-location \
+	"$base_url/pytorch-wheels/missing-redirect.tar.gz" \
+	"$upstream_url/whl/missing-redirect.tar.gz"
+assert-upstream-count HEAD "/whl/missing-redirect.tar.gz" 0
+assert-upstream-count GET "/whl/missing-redirect.tar.gz" 0
+
+# Proxy HEAD is currently synthetic and does not contact upstream.
+assert-status HEAD "$base_url/pytorch-wheels/missing-proxy.html" 200
+assert-upstream-count HEAD "/whl/missing-proxy.html" 0
 
 assert-status GET "$base_url/nix-channels/store/nix-cache-info" 200
 assert-body-contains "$base_url/nix-channels/store/nix-cache-info" "StoreDir: /nix/store"

@@ -1,13 +1,3 @@
-#![allow(
-    clippy::future_not_send,
-    clippy::cast_possible_truncation,
-    clippy::module_name_repetitions,
-    clippy::enum_variant_names,
-    clippy::case_sensitive_file_extension_comparisons,
-    clippy::cast_possible_wrap,
-    clippy::missing_errors_doc
-)]
-
 use std::sync::Arc;
 
 use actix_web::{App, HttpServer, guard, web};
