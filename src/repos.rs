@@ -15,25 +15,29 @@ use crate::{
 /// Routing decision returned by a `classify` closure in [`simple_intel`].
 pub enum RouteAction {
     /// Reverse-proxy the request to upstream.
+    /// NOTE: This should only be used for frequently-updated files,
+    /// such as HTML index, in case of restricted network traffic.
     Proxy,
     /// Follow the smart-cache strategy (redirect HEAD, stream or cache GET).
+    /// NOTE: Due to S3 API restriction, this is often paired with a
+    /// prefetch cache to fix response code inconsistency.
     Cache,
     /// Permanently redirect (301) to the upstream URL.
     Redirect,
 }
 
 pub fn simple_intel(
-    origin_injection: impl FnMut(&Endpoints) -> &str + Clone + Send + Sync + 'static,
+    origin_injection: impl Fn(&Endpoints) -> &str + Clone + Send + Sync + 'static,
     route: &'static str,
-    classify: impl FnMut(&Config, &str) -> RouteAction + Clone + Send + 'static,
+    classify: impl Fn(&Config, &str) -> RouteAction + Clone + Send + 'static,
 ) -> Route {
     let handler = move |path: IntelPath,
                         method: Method,
                         uri: Uri,
                         intel_mission: web::Data<IntelMission>,
                         config: web::Data<Config>| {
-        let mut origin_injection = origin_injection.clone();
-        let mut classify = classify.clone();
+        let origin_injection = origin_injection.clone();
+        let classify = classify.clone();
         async move {
             let origin = origin_injection(&config.endpoints).to_string();
             let path = path.to_string();
@@ -107,14 +111,11 @@ pub fn classify_cache_all(_config: &Config, _path: &str) -> RouteAction {
 /// Paths that pass the filter get [`RouteAction::Cache`];
 /// all others get [`RouteAction::Redirect`].
 pub fn classify_with(
-    mut filter: impl FnMut(&Config, &str) -> bool + Clone + Send + 'static,
-) -> impl FnMut(&Config, &str) -> RouteAction + Clone + Send + 'static {
-    move |config: &Config, path: &str| {
-        if filter(config, path) {
-            RouteAction::Cache
-        } else {
-            RouteAction::Redirect
-        }
+    filter: impl Fn(&Config, &str) -> bool + Clone + Send + 'static,
+) -> impl Fn(&Config, &str) -> RouteAction + Clone + Send + 'static {
+    move |config: &Config, path: &str| match filter(config, path) {
+        true => RouteAction::Cache,
+        false => RouteAction::Redirect,
     }
 }
 
