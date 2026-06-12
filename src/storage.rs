@@ -91,5 +91,5 @@ pub async fn check_s3(s3_config: &S3Config) -> Result<()> {
         Ok::<(), Error>(())
     })
     .await
-    .map_err(|err| Error::CustomError(format!("failed to check s3 storage {:?}", err)))?
+    .map_err(|err| Error::Custom(format!("failed to check s3 storage {:?}", err)))?
 }

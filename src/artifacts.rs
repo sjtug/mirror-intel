@@ -67,7 +67,7 @@ async fn remove_buffer_file(path: &Path) {
 async fn download_to_memory(response: Response, max_size: u64) -> Result<UploadPayload> {
     let body = response.bytes().await?;
     if body.len() as u64 > max_size {
-        return Err(Error::TooLarge(()));
+        return Err(Error::TooLarge);
     }
     Ok(UploadPayload::Memory(body))
 }
@@ -99,7 +99,7 @@ async fn download_to_file(
             })?;
             content_length += chunk.len() as u64;
             if content_length > max_size {
-                return Err(Error::TooLarge(()));
+                return Err(Error::TooLarge);
             }
             file.write_all(&chunk).await?;
         }
@@ -237,12 +237,12 @@ impl DownloadCtx<'static> {
             std::time::Duration::from_secs(config.download_timeout),
             task_fut,
         );
-        if let Err(err) = task_fut.await.unwrap_or(Err(Error::Timeout(()))) {
+        if let Err(err) = task_fut.await.unwrap_or(Err(Error::Timeout)) {
             warn!(error=?err, ttl=task_new.retry_limit, "failed to download task");
             task_new.retry_limit -= 1;
             self.metrics.failed_download_counter.inc();
 
-            if !matches!(err, Error::HTTPError(_)) && !matches!(err, Error::TooLarge(_)) {
+            if !matches!(err, Error::Http(_)) && !matches!(err, Error::TooLarge) {
                 self.fail_tx.send(task_new).unwrap();
                 self.metrics.task_in_queue.inc();
             }
@@ -302,7 +302,7 @@ async fn cache_task(task: Task, client: Client, config: &Config) -> Result<()> {
                 Ok(stream) => stream,
                 Err(err) => {
                     remove_buffer_file(&path).await;
-                    return Err(Error::CustomError(format!(
+                    return Err(Error::Custom(format!(
                         "failed to open buffered artifact {}: {:?}",
                         path.display(),
                         err
@@ -325,14 +325,14 @@ async fn download_payload(client: &Client, url: Url, config: &Config) -> Result<
     let response = client.get(url).send().await?;
     let status = response.status();
     if !status.is_success() {
-        return Err(Error::HTTPError(status));
+        return Err(Error::Http(status));
     }
 
     let max_size = max_download_size(config);
     let file_threshold = file_threshold(config);
 
     match response.content_length() {
-        Some(content_length) if content_length > max_size => Err(Error::TooLarge(())),
+        Some(content_length) if content_length > max_size => Err(Error::TooLarge),
         Some(content_length) if content_length > file_threshold => {
             info!("stream mode: file backend");
             download_to_file(response, config, max_size).await
@@ -489,6 +489,6 @@ mod tests {
             &config,
         )
         .await;
-        assert!(matches!(result, Err(Error::TooLarge(()))));
+        assert!(matches!(result, Err(Error::TooLarge)));
     }
 }

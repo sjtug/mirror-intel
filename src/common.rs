@@ -57,7 +57,7 @@ impl Task {
             self.storage,
             percent_decode(self.path.as_bytes())
                 .decode_utf8()
-                .map_err(|_| Error::DecodePathError(()))?
+                .map_err(|_| Error::DecodePath)?
         ))
     }
 

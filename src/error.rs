@@ -15,29 +15,29 @@ type ListObjectsSdkError =
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Failed to decode path")]
-    DecodePathError(()),
+    DecodePath,
     #[error("Failed to send task to pending queue")]
-    SendError(()),
+    Send,
     #[error("IO Error {0}")]
     Io(#[from] std::io::Error),
     #[error("Reqwest Error {0}")]
     Reqwest(#[from] reqwest::Error),
     #[error("HTTP Error {0}")]
-    HTTPError(reqwest::StatusCode),
+    Http(reqwest::StatusCode),
     #[error("{0}")]
-    CustomError(String),
+    Custom(String),
     #[error("Too Large")]
-    TooLarge(()),
+    TooLarge,
     #[error("Invalid Request")]
-    InvalidRequest(()),
+    InvalidRequest,
     #[error("Put Object Error {0}")]
-    PutObjectError(Box<PutObjectSdkError>),
+    PutObject(Box<PutObjectSdkError>),
     #[error("Get Object Error {0}")]
-    GetObjectsError(Box<GetObjectSdkError>),
+    GetObjects(Box<GetObjectSdkError>),
     #[error("List Objects Error {0}")]
-    ListObjectsError(Box<ListObjectsSdkError>),
+    ListObjects(Box<ListObjectsSdkError>),
     #[error("Timeout")]
-    Timeout(()),
+    Timeout,
 }
 
 impl ResponseError for Error {}
@@ -45,17 +45,17 @@ impl ResponseError for Error {}
 // Fix clippy "the `Err`-variant returned from this function is very large"
 impl From<PutObjectSdkError> for Error {
     fn from(error: PutObjectSdkError) -> Self {
-        Self::PutObjectError(Box::new(error))
+        Self::PutObject(Box::new(error))
     }
 }
 impl From<GetObjectSdkError> for Error {
     fn from(error: GetObjectSdkError) -> Self {
-        Self::GetObjectsError(Box::new(error))
+        Self::GetObjects(Box::new(error))
     }
 }
 impl From<ListObjectsSdkError> for Error {
     fn from(error: ListObjectsSdkError) -> Self {
-        Self::ListObjectsError(Box::new(error))
+        Self::ListObjects(Box::new(error))
     }
 }
 

@@ -86,7 +86,7 @@ pub async fn metrics_endpoint(intel_mission: web::Data<IntelMission>) -> Result<
     let metric_families = intel_mission.metrics.gather();
     encoder
         .encode(&metric_families, &mut buffer)
-        .map_err(|err| Error::CustomError(format!("failed to encode metrics: {:?}", err)))?;
+        .map_err(|err| Error::Custom(format!("failed to encode metrics: {:?}", err)))?;
     Ok(buffer)
 }
 
