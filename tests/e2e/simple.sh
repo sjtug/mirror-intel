@@ -108,6 +108,44 @@ assert-location() {
 	fi
 }
 
+assert-status-location() {
+	local method="$1"
+	local url="$2"
+	local expected_status="$3"
+	local expected_location="$4"
+	local status
+	local location
+	local headers
+
+	headers="$(mktemp)"
+	status="$(
+		curl \
+			--silent --show-error \
+			--request "$method" \
+			--dump-header "$headers" \
+			--output /dev/null \
+			--write-out '%{http_code}' \
+			"$url" || true
+	)"
+	location="$(
+		grep --ignore-case '^location:' "$headers" |
+			head --lines 1 |
+			tr -d '\r' |
+			sed --quiet --expression 's/^[Ll]ocation: //p' || true
+	)"
+	rm -f "$headers"
+
+	if test "$status" != "$expected_status"; then
+		echo "FAIL assert-status-location: method=$method url=$url expected-status=$expected_status actual-status=$status expected-location=$expected_location actual-location=$location" >&2
+		return 1
+	fi
+
+	if test "$location" != "$expected_location"; then
+		echo "FAIL assert-status-location: method=$method url=$url expected-status=$expected_status actual-status=$status expected-location=$expected_location actual-location=$location" >&2
+		return 1
+	fi
+}
+
 assert-upstream-count() {
 	local method="$1"
 	local path="$2"
@@ -148,7 +186,7 @@ upstream_url="http://127.0.0.1:18080"
 nix_store_url="http://127.0.0.1:18082"
 s3_url="http://127.0.0.1:18081"
 rocket_toml_path="${ROCKET_TOML_PATH:-Rocket.toml}"
-script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+script_dir="$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)"
 mirror_intel_pid=""
 fake_services_pid=""
 nix_serve_pid=""
@@ -210,14 +248,16 @@ assert-body-contains "$base_url/metrics" "resolve_counter"
 assert-status GET "$base_url/pytorch-wheels/" 200
 assert-body-contains "$base_url/pytorch-wheels/" "No route for pytorch-wheels."
 
-assert-status GET "$base_url/pytorch-wheels/torch/?mirror_intel_e2e=1" 302
-assert-location \
+assert-status-location \
+	GET \
 	"$base_url/pytorch-wheels/torch/?mirror_intel_e2e=1" \
+	302 \
 	"$upstream_url/whl/torch?mirror_intel_e2e=1"
 
-assert-status GET "$base_url/pytorch-wheels/cu130/torch/?mirror_intel_e2e=1" 302
-assert-location \
+assert-status-location \
+	GET \
 	"$base_url/pytorch-wheels/cu130/torch/?mirror_intel_e2e=1" \
+	302 \
 	"$upstream_url/whl/cu130/torch?mirror_intel_e2e=1"
 
 wait-for-status GET "$base_url/pytorch-wheels/cu130/torch/" 302
@@ -234,25 +274,28 @@ assert-status GET "$base_url/pytorch-wheels/missing-cache-path/" 404
 assert-upstream-count HEAD "/whl/missing-cache-path" 1
 assert-upstream-count GET "/whl/missing-cache-path" 0
 
-assert-status GET "$base_url/pytorch-wheels/upstream-only/" 302
-assert-location \
+assert-status-location \
+	GET \
 	"$base_url/pytorch-wheels/upstream-only/" \
+	302 \
 	"$upstream_url/whl/upstream-only"
 assert-upstream-count HEAD "/whl/upstream-only" 1
 wait-for-body-contains "$s3_url/bucket/pytorch-wheels/upstream-only" "upstream-only cache fixture"
 
 # Query-string requests intentionally bypass classification and cache prefetch.
-assert-status GET "$base_url/pytorch-wheels/missing-query/?mirror_intel_e2e=1" 302
-assert-location \
+assert-status-location \
+	GET \
 	"$base_url/pytorch-wheels/missing-query/?mirror_intel_e2e=1" \
+	302 \
 	"$upstream_url/whl/missing-query?mirror_intel_e2e=1"
 assert-upstream-count HEAD "/whl/missing-query" 0
 assert-upstream-count GET "/whl/missing-query" 0
 
 # Redirect-classified paths remain unconditional upstream redirects.
-assert-status GET "$base_url/pytorch-wheels/missing-redirect.tar.gz" 301
-assert-location \
+assert-status-location \
+	GET \
 	"$base_url/pytorch-wheels/missing-redirect.tar.gz" \
+	301 \
 	"$upstream_url/whl/missing-redirect.tar.gz"
 assert-upstream-count HEAD "/whl/missing-redirect.tar.gz" 0
 assert-upstream-count GET "/whl/missing-redirect.tar.gz" 0
@@ -264,9 +307,10 @@ assert-upstream-count HEAD "/whl/missing-proxy.html" 0
 assert-status GET "$base_url/nix-channels/store/nix-cache-info" 200
 assert-body-contains "$base_url/nix-channels/store/nix-cache-info" "StoreDir: /nix/store"
 
-assert-status GET "$base_url/nix-channels/store/$nix_cache_narinfo?mirror_intel_e2e=1" 302
-assert-location \
+assert-status-location \
+	GET \
 	"$base_url/nix-channels/store/$nix_cache_narinfo?mirror_intel_e2e=1" \
+	302 \
 	"$nix_store_url/$nix_cache_narinfo?mirror_intel_e2e=1"
 
 assert-status GET "$base_url/nix-channels/store/$nix_cache_narinfo" 200
@@ -284,5 +328,6 @@ assert-status GET "$base_url/nix-channels/store/$nix_cache_nar_path" 200
 wait-for-status GET "$s3_url/bucket/nix-channels/store/$nix_cache_nar_path" 200
 assert-status GET "$base_url/nix-channels/store/$nix_cache_nar_path" 200
 
+# suppress '$out is referenced but not assigned' (Nix setup hooks assigns it)
 # shellcheck disable=SC2154
 touch "$out"

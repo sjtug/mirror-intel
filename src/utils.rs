@@ -248,6 +248,7 @@ impl StatusCodeExt for reqwest::StatusCode {
 mod tests {
     use std::future::Future;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use actix_http::body::to_bytes;
     use httpmock::{Method, MockServer};
@@ -255,6 +256,7 @@ mod tests {
     use tokio::sync::mpsc::{Receiver, channel};
 
     use crate::common::{IntelObject, IntelResponse, S3Config, Task};
+    use crate::s3_cache::PrefetchCache;
     use crate::storage::get_anonymous_s3_client;
     use crate::{Config, IntelMission, Metrics};
 
@@ -282,8 +284,10 @@ mod tests {
         let mission = IntelMission {
             tx: Some(tx),
             client,
+            prefetch_client: Client::new(),
             metrics: Arc::new(Metrics::default()),
             s3_client: Arc::new(get_anonymous_s3_client(&config.s3)),
+            prefetch_cache: Arc::new(PrefetchCache::new(Duration::from_secs(60))),
         };
 
         f(server, config, mission, rx).await;
