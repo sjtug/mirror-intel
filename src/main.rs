@@ -79,7 +79,6 @@ fn setup_log() -> impl Drop {
 }
 
 /// Metrics endpoint.
-#[allow(clippy::unused_async)]
 pub async fn metrics_endpoint(intel_mission: web::Data<IntelMission>) -> Result<Vec<u8>> {
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
