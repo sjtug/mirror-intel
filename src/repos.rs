@@ -467,7 +467,6 @@ pub fn nix_intel(
     web::get().to(handler)
 }
 
-#[allow(clippy::unused_async)]
 pub async fn index(path: IntelPath, config: web::Data<Config>) -> IntelResponse {
     if config
         .endpoints

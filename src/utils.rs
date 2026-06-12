@@ -189,7 +189,6 @@ impl IntelObject {
 }
 
 /// 404 page.
-#[allow(clippy::unused_async)]
 pub async fn not_found(uri: Uri) -> impl Responder {
     no_route_for(&uri.to_string())
 }
