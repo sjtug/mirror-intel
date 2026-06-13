@@ -46,25 +46,23 @@ fn setup_log() -> impl Drop {
         .unwrap_or_default()
         .to_lowercase();
 
-    // TODO: simplify logic
-    let (json, after) = match (rust_log_format.as_str(), cfg!(debug_assertions)) {
-        ("plain", _) => (false, None),
-        ("json", _) => (true, None),
-        ("", dev) => (!dev, None), // release defaults to json and debug to plain
-        (format, dev) => (
-            !dev,
-            Some(move || {
-                warn!(
-                    "RUST_LOG_FORMAT is set to '{}', but mirror-intel is in {} mode. Using '{}'",
-                    format,
-                    if dev { "debug" } else { "release" },
-                    if dev { "plain" } else { "json" }
-                );
-            }),
-        ),
+    let use_json = match rust_log_format.as_str() {
+        "plain" => false,
+        "json" => true,
+        "" => !cfg!(debug_assertions),
+        format => {
+            let dev = cfg!(debug_assertions);
+            warn!(
+                "RUST_LOG_FORMAT is set to '{}', but mirror-intel is in {} mode. Using '{}'",
+                format,
+                if dev { "debug" } else { "release" },
+                if dev { "plain" } else { "json" }
+            );
+            !dev
+        }
     };
 
-    if json {
+    if use_json {
         tracing::subscriber::set_global_default(registry.with(JsonStorageLayer).with(
             BunyanFormattingLayer::new("mirror-intel".to_string(), writer),
         ))
@@ -75,9 +73,7 @@ fn setup_log() -> impl Drop {
         )
         .expect("Unable to set logger");
     };
-    if let Some(after) = after {
-        after();
-    }
+
     guard
 }
 
@@ -118,8 +114,8 @@ async fn main() {
     let metrics = Arc::new(Metrics::default());
     let metrics_download = metrics.clone();
     let tx = (!config.read_only).then(|| {
-        // TODO so we are now having a global bounded queue, which will be easily blocked if there're
-        // too many requests to large files. See issue #24.
+        // NOTE: The global bounded channel (`max_pending_task` capacity) can deadlock
+        // under heavy load from many large-file requests. See issue #24.
         let (tx, rx) = channel(config.max_pending_task);
 
         let config_download = config.clone();

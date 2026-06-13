@@ -58,7 +58,8 @@ pub fn simple_intel(
             }
 
             match classify(&config, &task.path) {
-                // TODO: document
+                // Reverse-proxy: HEAD returns 200 OK with no body; GET fetches
+                // upstream and streams the response back.
                 RouteAction::Proxy => {
                     let resp = if method == Method::HEAD {
                         HttpResponse::Ok().finish().into()
@@ -70,7 +71,9 @@ pub fn simple_intel(
                     };
                     Ok(resp)
                 }
-                // TODO: document
+                // Smart-cache: consults the prefetch cache first. If no entry exists,
+                // returns 404. HEAD requests redirect to origin; GET requests either stream
+                // small cached objects directly or redirect for larger ones.
                 RouteAction::Cache => {
                     if matches!(
                         intel_mission
@@ -99,7 +102,7 @@ pub fn simple_intel(
                     };
                     Ok(resp)
                 }
-                // TODO: document
+                // Permanent redirect (301) to the upstream URL.
                 RouteAction::Redirect => {
                     Ok(Redirect::Permanent(task.upstream_url().to_string()).into())
                 }
