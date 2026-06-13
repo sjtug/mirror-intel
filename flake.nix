@@ -49,16 +49,38 @@
           ...
         }:
         let
-          inherit (pkgs) stdenv pkgsStatic;
+          inherit (pkgs)
+            stdenv
+            pkgsStatic
+            cacert
+            rust-jemalloc-sys
+            ;
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (p: p.rustToolchain);
 
-          craneAttrs = import ./nix/crane.nix { inherit craneLib pkgs lib; };
-          inherit (craneAttrs)
-            src
-            commonArgs
-            cargoArtifacts
-            mergeCraneArgs
-            ;
+          src =
+            let
+              root = ./.;
+            in
+            lib.fileset.toSource {
+              inherit root;
+              fileset = lib.fileset.unions [
+                (craneLib.fileset.commonCargoSources root)
+                (lib.fileset.maybeMissing (root + "/tests"))
+              ];
+            };
+
+          # NOTE: `buildInputs` and sometimes `nativeBuildInputs`
+          # should be explicitly overridden for cross compilation
+          commonArgs = {
+            inherit src;
+            strictDeps = true;
+            nativeBuildInputs = [ cacert ];
+            buildInputs = [ rust-jemalloc-sys ];
+            doCheck = false; # Test separately with cargo-nextest
+          };
+          # Build *just* the cargo dependencies, so we can reuse
+          # all of that work (e.g. via cachix) when running in CI
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
           defaultTarget = stdenv.hostPlatform.config;
           muslTarget =
@@ -77,18 +99,20 @@
               inherit cargoArtifacts;
               CARGO_PROFILE = "dev";
               CARGO_BUILD_TARGET = defaultTarget;
-              buildInputs = [ pkgs.rust-jemalloc-sys ];
             }
           );
 
           my-crate-musl = craneLib.buildPackage (
-            mergeCraneArgs commonArgs {
+            commonArgs
+            // {
               nativeBuildInputs = [
                 # Required by aws-lc-sys
+                cacert
                 stdenv.cc
                 pkgsStatic.stdenv.cc
               ];
               buildInputs = [ pkgsStatic.rust-jemalloc-sys ];
+              doCheck = true; # always run checkPhase for release artifact
               CARGO_PROFILE = "release";
               CARGO_BUILD_TARGET = muslTarget;
               CARGO_BUILD_FLAGS = "-C target-feature=+crt-static";
