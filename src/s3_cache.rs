@@ -84,13 +84,24 @@ async fn direct_prefetch_cache_action(
     mission: &IntelMission,
     config: &Config,
 ) -> PreCacheStatus {
-    let s3_head = head_req(&mission.prefetch_client, task.cached_url(config));
-    let upstream_head = head_req(&mission.prefetch_client, task.upstream_url());
+    // Probe S3 first and only fall back to upstream on an S3 miss. This runs
+    // in the request-hot path for `RouteAction::Cache` (`repos.rs`), so the
+    // sequential ordering is a deliberate performance tradeoff.
+    if head_req(&mission.prefetch_client, task.cached_url(config)).await {
+        return PreCacheStatus::S3;
+    }
 
-    match tokio::join!(s3_head, upstream_head) {
-        (true, _) => PreCacheStatus::S3,
-        (false, true) => PreCacheStatus::Upstream,
-        (false, false) => PreCacheStatus::None,
+    // Mirror the download worker (`artifacts::run`) and rewrite the origin via
+    // `endpoints.overrides` before probing, otherwise the HEAD targets the
+    // configured origin that may be unreachable without the rewrite, causing
+    // false-negative `None` results (and spurious 404s in the request path).
+    let mut upstream_task = task.clone();
+    upstream_task.apply_override(&config.endpoints.overrides);
+
+    if head_req(&mission.prefetch_client, upstream_task.upstream_url()).await {
+        PreCacheStatus::Upstream
+    } else {
+        PreCacheStatus::None
     }
 }
 
@@ -119,7 +130,7 @@ mod tests {
     use reqwest::Client;
     use tokio::sync::mpsc::channel;
 
-    use crate::common::{Config, IntelMission, Metrics, S3Config, Task};
+    use crate::common::{Config, EndpointOverride, IntelMission, Metrics, S3Config, Task};
     use crate::storage::get_anonymous_s3_client;
 
     use super::{PreCacheStatus, PrefetchCache};
@@ -220,6 +231,80 @@ mod tests {
                 .iter()
                 .all(|status| *status == PreCacheStatus::None)
         );
+        s3_head.assert_calls_async(1).await;
+        upstream_head.assert_calls_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn must_skip_upstream_probe_when_s3_hits() {
+        let server = MockServer::start_async().await;
+        let s3_head = server
+            .mock_async(|when, then| {
+                when.method(Method::HEAD).path("/bucket/storage/missing");
+                then.status(200);
+            })
+            .await;
+        let upstream_head = server
+            .mock_async(|when, then| {
+                when.method(Method::HEAD).path("/missing");
+                then.status(200);
+            })
+            .await;
+        let config = make_config(&server);
+        let cache = Arc::new(PrefetchCache::new(Duration::from_secs(60)));
+        let mission = make_mission(&config, cache.clone());
+        let task = make_task(&server);
+
+        assert_eq!(
+            cache.prefetch_cache_action(&task, &mission, &config).await,
+            PreCacheStatus::S3
+        );
+
+        s3_head.assert_calls_async(1).await;
+        // S3 already had the object, so upstream must not be contacted.
+        upstream_head.assert_calls_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn must_apply_endpoint_overrides_to_upstream_probe() {
+        let server = MockServer::start_async().await;
+        // S3 miss forces the upstream probe to run.
+        let s3_head = server
+            .mock_async(|when, then| {
+                when.method(Method::HEAD).path("/bucket/storage/missing");
+                then.status(404);
+            })
+            .await;
+        // Upstream is reachable only because the override rewrites the origin
+        // onto the mock server. Without the rewrite the probe would target an
+        // unroutable host and report `None`.
+        let upstream_head = server
+            .mock_async(|when, then| {
+                when.method(Method::HEAD).path("/missing");
+                then.status(200);
+            })
+            .await;
+
+        let mut config = make_config(&server);
+        config.endpoints.overrides = vec![EndpointOverride {
+            name: "rewrite-blocked".to_string(),
+            pattern: "https://blocked.invalid".to_string(),
+            replace: server.base_url(),
+        }];
+        let cache = Arc::new(PrefetchCache::new(Duration::from_secs(60)));
+        let mission = make_mission(&config, cache.clone());
+        let task = Task {
+            storage: "storage",
+            origin: "https://blocked.invalid".to_string(),
+            path: "missing".to_string(),
+            retry_limit: 3,
+        };
+
+        assert_eq!(
+            cache.prefetch_cache_action(&task, &mission, &config).await,
+            PreCacheStatus::Upstream
+        );
+
         s3_head.assert_calls_async(1).await;
         upstream_head.assert_calls_async(1).await;
     }
