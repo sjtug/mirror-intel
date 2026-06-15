@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use actix_web::http::{Method, Uri};
+use actix_web::http::{Method, StatusCode, Uri};
 use actix_web::{HttpResponse, Route, guard, web};
 use regex::Regex;
 
@@ -464,18 +464,28 @@ pub fn nix_intel(
             }
 
             if task.path.starts_with("nar/") || task.path.ends_with(".narinfo") {
-                Ok(task
+                match task
                     .resolve(&intel_mission, &config)
                     .await?
                     .reverse_proxy(&intel_mission)
-                    .await?
-                    .into())
+                    .await
+                {
+                    Ok(resp) => Ok(resp.into()),
+                    Err(Error::Http(status)) if status == StatusCode::NOT_FOUND => {
+                        Ok(HttpResponse::NotFound().finish().into())
+                    }
+                    Err(Error::Reqwest(_)) => Ok(HttpResponse::NotFound().finish().into()),
+                    Err(e) => Err(e),
+                }
             } else if task.path == "nix-cache-info" {
-                Ok(task
-                    .resolve_upstream()
-                    .reverse_proxy(&intel_mission)
-                    .await?
-                    .into())
+                match task.resolve_upstream().reverse_proxy(&intel_mission).await {
+                    Ok(resp) => Ok(resp.into()),
+                    Err(Error::Http(status)) if status == StatusCode::NOT_FOUND => {
+                        Ok(HttpResponse::NotFound().finish().into())
+                    }
+                    Err(Error::Reqwest(_)) => Ok(HttpResponse::NotFound().finish().into()),
+                    Err(e) => Err(e),
+                }
             } else {
                 Ok(Redirect::Permanent(task.upstream_url().to_string()).into())
             }

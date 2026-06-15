@@ -3,6 +3,7 @@
 use std::result;
 
 use actix_web::ResponseError;
+use actix_web::http::StatusCode;
 use thiserror::Error;
 
 type PutObjectSdkError =
@@ -23,7 +24,7 @@ pub enum Error {
     #[error("Reqwest Error {0}")]
     Reqwest(#[from] reqwest::Error),
     #[error("HTTP Error {0}")]
-    Http(reqwest::StatusCode),
+    Http(StatusCode),
     #[error("{0}")]
     Custom(String),
     #[error("Too Large")]
@@ -40,7 +41,17 @@ pub enum Error {
     Timeout,
 }
 
-impl ResponseError for Error {}
+impl ResponseError for Error {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::Reqwest(err) if err.is_connect() => StatusCode::BAD_GATEWAY,
+            Self::Reqwest(err) if err.is_timeout() => StatusCode::GATEWAY_TIMEOUT,
+            Self::Http(status) => *status,
+            Self::InvalidRequest => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
 
 // Fix clippy "the `Err`-variant returned from this function is very large"
 impl From<PutObjectSdkError> for Error {

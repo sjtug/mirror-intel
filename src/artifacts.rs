@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use actix_web::http::StatusCode;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use reqwest::{Client, Response};
@@ -325,6 +326,8 @@ async fn download_payload(client: &Client, url: Url, config: &Config) -> Result<
     let response = client.get(url).send().await?;
     let status = response.status();
     if !status.is_success() {
+        let status =
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         return Err(Error::Http(status));
     }
 
