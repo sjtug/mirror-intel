@@ -8,8 +8,8 @@ use crate::error::Result;
 use crate::intel_path::IntelPath;
 use crate::{
     Error,
-    common::{Config, Endpoints, IntelMission, IntelResponse, Redirect, Task},
-    s3_cache::PreCacheStatus,
+    common::{Config, Endpoints, IntelMission, IntelObject, IntelResponse, Redirect, Task},
+    s3_cache::{self, PreCacheStatus},
     utils,
 };
 
@@ -136,36 +136,77 @@ pub fn classify_with(
     }
 }
 
-/// Classify paths for the pytorch-wheels route.
+/// Whether a path looks like a PyTorch wheel artifact (as opposed to an
+/// HTML index page).  Artifact paths get a 301 redirect to the S3 website URL;
+/// non-artifact paths are reverse-proxied from S3.
+fn is_pytorch_artifact(path: &str) -> bool {
+    path.ends_with(".whl")
+        || path.ends_with(".metadata")
+        || path.ends_with(".tar.gz")
+        || path.ends_with(".zip")
+        || path.ends_with(".exe")
+}
+
+/// S3-authoritative handler for `/pytorch-wheels/{path}`.
 ///
-/// * `.html` files → [`RouteAction::Proxy`]  (reverse-proxy upstream for freshness)
-/// * `.whl` files and `#sha256=` fragment links → [`RouteAction::Cache`]
-/// * source archives (`.tar.gz`, `.zip`, `.exe`) → [`RouteAction::Redirect`]
-/// * everything else → [`RouteAction::Cache`]
+/// Never probes or redirects to `download.pytorch.org`.
+/// - HEAD (any path) → 301 to S3 website URL if the object exists, else 404.
+/// - GET artifact → 301 to S3 website URL.
+/// - GET index/HTML → reverse-proxy the S3 body through mirror-intel.
+/// - Missing S3 objects → 404.
+/// - Query strings are ignored (stay inside S3-authoritative route).
+pub async fn pytorch_wheels(
+    path: IntelPath,
+    method: Method,
+    intel_mission: web::Data<IntelMission>,
+    config: web::Data<Config>,
+) -> Result<IntelResponse> {
+    let path = path.to_string();
+    let task = Task {
+        storage: "pytorch-wheels",
+        retry_limit: config.max_retries,
+        origin: config.endpoints.pytorch_wheels.clone(),
+        path: path.clone(),
+    };
+
+    let cached = task.cached_url(&config);
+
+    // S3-only existence check — never fall back to upstream.
+    if !s3_cache::s3_head_exists(&intel_mission.prefetch_client, &cached).await {
+        return Ok(HttpResponse::NotFound().finish().into());
+    }
+
+    if method == Method::HEAD || is_pytorch_artifact(&path) {
+        return Ok(Redirect::Permanent(cached.to_string()).into());
+    }
+
+    // GET non-artifact (HTML index): fetch from S3 and reverse-proxy.
+    let resp = intel_mission.client.get(cached).send().await?;
+    if !resp.status().is_success() {
+        return Ok(HttpResponse::NotFound().finish().into());
+    }
+    Ok(IntelObject::Cached { task, resp }
+        .reverse_proxy(&intel_mission)
+        .await?
+        .into())
+}
+
+/// Permanent-redirect handler for `/pypi-packages/{path}`.
 ///
-/// Directory index pages and unknown paths all use the smart-cache strategy:
-/// HEAD requests are redirected to upstream (cheap revalidation), while GET
-/// requests are resolved through `stream_small_cached` (small HTML listings get
-/// cached, large wheel files are streamed through).
-pub fn wheels_route_classify(_config: &Config, path: &str) -> RouteAction {
-    if path.ends_with(".html") {
-        return RouteAction::Proxy;
+/// Always returns 301 to the configured PyPI package mirror, for both GET and HEAD.
+pub async fn pypi_packages(
+    path: IntelPath,
+    uri: Uri,
+    config: web::Data<Config>,
+) -> Result<IntelResponse> {
+    let path = path.to_string();
+    let origin = config.endpoints.pypi_packages.clone();
+    let target = format!("{}/{}", origin.trim_end_matches('/'), path);
+    if let Some(query) = uri.query() {
+        Ok(Redirect::Permanent(format!("{target}?{query}")).into())
+    } else {
+        Ok(Redirect::Permanent(target).into())
     }
-
-    // Source archives and Windows installers — redirect to upstream.
-    if path.ends_with(".tar.gz") || path.ends_with(".zip") || path.ends_with(".exe") {
-        return RouteAction::Redirect;
-    }
-
-    if let Some((wheel_path, sha256)) = path.split_once("#sha256=")
-        && wheel_path.ends_with(".whl")
-        && sha256.len() == 64
-        && sha256.chars().all(|c| c.is_ascii_hexdigit())
-    {
-        return RouteAction::Cache;
-    }
-
-    RouteAction::Cache
 }
 
 pub fn ostree_allow(_config: &Config, path: &str) -> bool {
@@ -273,7 +314,9 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
         )
         .route(
             "/pypi-packages/{path:.+}",
-            simple_intel(|c| &c.pypi_packages, "pypi-packages", classify_cache_all),
+            web::route()
+                .guard(guard::Any(guard::Get()).or(guard::Head()))
+                .to(pypi_packages),
         )
         .route(
             "/homebrew-bottles/{path:.+}",
@@ -301,11 +344,9 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
         )
         .route(
             "/pytorch-wheels/{path:.+}",
-            simple_intel(
-                |c| &c.pytorch_wheels,
-                "pytorch-wheels",
-                wheels_route_classify,
-            ),
+            web::route()
+                .guard(guard::Any(guard::Get()).or(guard::Head()))
+                .to(pytorch_wheels),
         )
         .route(
             "/sjtug-internal/{path:.+}",
@@ -569,13 +610,43 @@ mod tests {
                 then.status(200).body("");
             })
             .await;
+        // PyTorch wheels S3 mocks
+        let _mock_pt_html_head = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path("/bucket/pytorch-wheels/cu130/torch");
+                then.status(200).body("");
+            })
+            .await;
+        let _mock_pt_html_get = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/bucket/pytorch-wheels/cu130/torch");
+                then.status(200).body("cu130 torch cached directory index");
+            })
+            .await;
+        let _mock_pt_whl_head = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path("/bucket/pytorch-wheels/cu130/torch-0.0.1+cu130.whl");
+                then.status(200).body("");
+            })
+            .await;
+        let _mock_pt_meta_head = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path("/bucket/pytorch-wheels/cu130/torch-0.0.1+cu130.whl.metadata");
+                then.status(200).body("");
+            })
+            .await;
         let sjtug_internal = server.base_url();
+        let pypi_packages_endpoint = "https://mirrors.bfsu.edu.cn/pypi/web/packages".to_string();
         let figment = Figment::new()
             .join(("address", "127.0.0.1"))
             .join(("port", 8000))
             .join(("concurrent_download", 512))
             .join(("max_pending_task", 16384))
-            .join(("endpoints", map!["sjtug_internal" => sjtug_internal]))
+            .join(("endpoints", map!["sjtug_internal" => sjtug_internal, "pypi_packages" => pypi_packages_endpoint, "pytorch_wheels" => "https://download.pytorch.org/whl".to_string()]))
             .join(("s3.name", "Placeholder S3"))
             .join(("s3.endpoint", server.base_url()))
             .join(("s3.website_endpoint", server.base_url()))
@@ -617,11 +688,15 @@ mod tests {
             )
             .route(
                 "/pytorch-wheels/{path:.+}",
-                simple_intel(
-                    |c| &c.pytorch_wheels,
-                    "pytorch-wheels",
-                    wheels_route_classify,
-                ),
+                web::route()
+                    .guard(guard::Any(guard::Get()).or(guard::Head()))
+                    .to(pytorch_wheels),
+            )
+            .route(
+                "/pypi-packages/{path:.+}",
+                web::route()
+                    .guard(guard::Any(guard::Get()).or(guard::Head()))
+                    .to(pypi_packages),
             )
             .route(
                 "/sjtug-internal/{path:.+}",
@@ -843,63 +918,15 @@ mod tests {
     }
 
     #[test]
-    fn test_wheels_route_classify() {
-        let config = Config::default();
-        // .html files are proxied
-        assert!(matches!(
-            wheels_route_classify(&config, "torch_stable.html"),
-            RouteAction::Proxy
-        ));
-        // .whl files are cached
-        assert!(matches!(
-            wheels_route_classify(&config, "torch-2.0.0-cp311-cp311-manylinux.whl"),
-            RouteAction::Cache
-        ));
-        // Invalid #sha256 fragment → Cache (smart cache handles unknown paths)
-        assert!(matches!(
-            wheels_route_classify(
-                &config,
-                "torch-2.0.0-cp311-cp311-manylinux.whl#sha256=0123456789abcdef"
-            ),
-            RouteAction::Cache
-        ));
-        // Valid .whl with hash → cache
-        assert!(matches!(
-            wheels_route_classify(
-                &config,
-                "cpu/torch-2.11.0%2Bcpu-cp314-cp314t-manylinux_2_28_x86_64.whl"
-            ),
-            RouteAction::Cache
-        ));
-        assert!(matches!(
-            wheels_route_classify(
-                &config,
-                "cu130/torch-2.11.0%2Bcu130-cp314-cp314t-manylinux_2_28_x86_64.whl"
-            ),
-            RouteAction::Cache
-        ));
-        // Source archives and installers → redirect to upstream
-        assert!(matches!(
-            wheels_route_classify(&config, "torch-2.0.0.tar.gz"),
-            RouteAction::Redirect
-        ));
-        assert!(matches!(
-            wheels_route_classify(&config, "torch-2.0.0.zip"),
-            RouteAction::Redirect
-        ));
-        assert!(matches!(
-            wheels_route_classify(&config, "torch-2.0.0-cp311-cp311-win_amd64.exe"),
-            RouteAction::Redirect
-        ));
-        // Unknown paths (directory indexes, etc.) → Cache (smart cache strategy)
-        assert!(matches!(
-            wheels_route_classify(&config, "torch"),
-            RouteAction::Cache
-        ));
-        assert!(matches!(
-            wheels_route_classify(&config, "cu130/torch"),
-            RouteAction::Cache
-        ));
+    fn test_is_pytorch_artifact() {
+        assert!(is_pytorch_artifact("cu130/torch-0.0.1+cu130.whl"));
+        assert!(is_pytorch_artifact("cu130/torch-0.0.1+cu130.whl.metadata"));
+        assert!(is_pytorch_artifact("torch-2.0.0.tar.gz"));
+        assert!(is_pytorch_artifact("torch-2.0.0.zip"));
+        assert!(is_pytorch_artifact("torch-2.0.0-cp311-cp311-win_amd64.exe"));
+        assert!(!is_pytorch_artifact("cu130/torch"));
+        assert!(!is_pytorch_artifact("cu130/torch/"));
+        assert!(!is_pytorch_artifact("torch_stable.html"));
     }
 
     #[test]
@@ -920,21 +947,120 @@ mod tests {
 
     #[serial(cwd_env)]
     #[tokio::test]
-    async fn test_proxy_head() {
-        // proxied HEAD path should return 200 directly.
-        let (service, _, _rx, _server) = make_service().await;
-        let object = Task {
-            storage: "pytorch-wheels",
-            origin: "https://download.pytorch.org/whl".to_string(),
-            path: "torch_stable.html".to_string(),
-            retry_limit: 3,
-        };
-        let req = TestRequest::default()
-            .method(Method::HEAD)
-            .uri(object.root_path().as_str())
+    async fn test_pytorch_wheels_html_get() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/cu130/torch")
             .to_request();
         let resp = call_service(&service, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = actix_http::body::to_bytes(resp.into_body()).await.unwrap();
+        assert!(std::str::from_utf8(&body).unwrap().contains("cu130 torch cached directory index"));
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn test_pytorch_wheels_html_head() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::default()
+            .method(Method::HEAD)
+            .uri("/pytorch-wheels/cu130/torch")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        let location = resp.headers().get("Location").unwrap().to_str().unwrap();
+        assert!(location.contains("/bucket/pytorch-wheels/cu130/torch"));
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn test_pytorch_wheels_artifact_get() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/cu130/torch-0.0.1+cu130.whl")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        let location = resp.headers().get("Location").unwrap().to_str().unwrap();
+        assert!(location.contains("/bucket/pytorch-wheels/cu130/torch-0.0.1+cu130.whl"));
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn test_pytorch_wheels_metadata_head() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::default()
+            .method(Method::HEAD)
+            .uri("/pytorch-wheels/cu130/torch-0.0.1+cu130.whl.metadata")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        let location = resp.headers().get("Location").unwrap().to_str().unwrap();
+        assert!(location.contains(".whl.metadata"));
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn test_pytorch_wheels_missing_404() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/missing-path")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn test_pytorch_wheels_query_string_404() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/missing-query?mirror_intel_e2e=1")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn test_pypi_packages_redirect() {
+        let (service, _config, _rx, _server) = make_service().await;
+        // GET
+        let req = TestRequest::get()
+            .uri("/pypi-packages/aa/bb/pkg-0.1.0.whl")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        assert_eq!(
+            resp.headers().get("Location").unwrap().to_str().unwrap(),
+            "https://mirrors.bfsu.edu.cn/pypi/web/packages/aa/bb/pkg-0.1.0.whl"
+        );
+        // HEAD
+        let req = TestRequest::default()
+            .method(Method::HEAD)
+            .uri("/pypi-packages/aa/bb/pkg-0.1.0.whl")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        assert_eq!(
+            resp.headers().get("Location").unwrap().to_str().unwrap(),
+            "https://mirrors.bfsu.edu.cn/pypi/web/packages/aa/bb/pkg-0.1.0.whl"
+        );
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn test_pypi_packages_metadata_redirect() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pypi-packages/aa/bb/pkg-0.1.0.whl.metadata")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        assert_eq!(
+            resp.headers().get("Location").unwrap().to_str().unwrap(),
+            "https://mirrors.bfsu.edu.cn/pypi/web/packages/aa/bb/pkg-0.1.0.whl.metadata"
+        );
     }
 
     #[test]

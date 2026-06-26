@@ -166,6 +166,17 @@ assert-upstream-count() {
 	fi
 }
 
+put-s3-object() {
+	local key="$1"
+	local body="$2"
+
+	curl \
+		--silent --show-error --fail \
+		--request PUT \
+		--data-binary "$body" \
+		"$s3_url/bucket/$key" >/dev/null
+}
+
 cleanup() {
 	if test -n "${mirror_intel_pid:-}" && kill -0 "$mirror_intel_pid" 2>/dev/null; then
 		kill "$mirror_intel_pid"
@@ -221,6 +232,16 @@ wait-for-connection "$upstream_url/health"
 wait-for-connection "$nix_store_url/nix-cache-info"
 wait-for-connection "$s3_url/health"
 
+put-s3-object \
+	"pytorch-wheels/cu130/torch" \
+	"cu130 torch cached directory index"
+put-s3-object \
+	"pytorch-wheels/cu130/torch-0.0.1+cu130.whl" \
+	"fake cu130 wheel"
+put-s3-object \
+	"pytorch-wheels/cu130/torch-0.0.1+cu130.whl.metadata" \
+	"fake cu130 wheel metadata"
+
 nix_cache_basename="$(basename -- "$NIX_CACHE_FIXTURE")"
 nix_cache_narinfo="${nix_cache_basename%%-*}.narinfo"
 nix_cache_nar_path="$(
@@ -248,60 +269,59 @@ assert-body-contains "$base_url/metrics" "resolve_counter"
 assert-status GET "$base_url/pytorch-wheels/" 200
 assert-body-contains "$base_url/pytorch-wheels/" "No route for pytorch-wheels."
 
-assert-status-location \
-	GET \
-	"$base_url/pytorch-wheels/torch/?mirror_intel_e2e=1" \
-	302 \
-	"$upstream_url/whl/torch?mirror_intel_e2e=1"
-
-assert-status-location \
-	GET \
-	"$base_url/pytorch-wheels/cu130/torch/?mirror_intel_e2e=1" \
-	302 \
-	"$upstream_url/whl/cu130/torch?mirror_intel_e2e=1"
-
-wait-for-status GET "$base_url/pytorch-wheels/cu130/torch/" 302
-wait-for-body-contains "$base_url/pytorch-wheels/cu130/torch/" "cu130 torch cached directory index"
-
+assert-status GET "$base_url/pytorch-wheels/torch/?mirror_intel_e2e=1" 404
+assert-status GET "$base_url/pytorch-wheels/cu130/torch/?mirror_intel_e2e=1" 200
 assert-status GET "$base_url/pytorch-wheels/cu130/torch/" 200
 assert-body-contains "$base_url/pytorch-wheels/cu130/torch/" "cu130 torch cached directory index"
 assert-body-contains "$s3_url/bucket/pytorch-wheels/cu130/torch" "cu130 torch cached directory index"
 assert-status HEAD "$base_url/pytorch-wheels/cu130/torch/" 301
+assert-upstream-count GET "/whl/torch" 0
+assert-upstream-count GET "/whl/cu130/torch" 0
+assert-upstream-count HEAD "/whl/cu130/torch" 0
 
-# Cache-classified paths should be guarded by HEAD prefetch before the existing
-# smart-cache path is allowed to enqueue downloads or redirect to upstream.
+assert-status-location \
+	GET \
+	"$base_url/pytorch-wheels/cu130/torch-0.0.1+cu130.whl" \
+	301 \
+	"$s3_url/bucket/pytorch-wheels/cu130/torch-0.0.1+cu130.whl"
+assert-status-location \
+	HEAD \
+	"$base_url/pytorch-wheels/cu130/torch-0.0.1+cu130.whl.metadata" \
+	301 \
+	"$s3_url/bucket/pytorch-wheels/cu130/torch-0.0.1+cu130.whl.metadata"
+
+assert-status-location \
+	GET \
+	"$base_url/pypi-packages/aa/bb/pkg-0.1.0.whl" \
+	301 \
+	"https://mirrors.bfsu.edu.cn/pypi/web/packages/aa/bb/pkg-0.1.0.whl"
+assert-status-location \
+	HEAD \
+	"$base_url/pypi-packages/aa/bb/pkg-0.1.0.whl" \
+	301 \
+	"https://mirrors.bfsu.edu.cn/pypi/web/packages/aa/bb/pkg-0.1.0.whl"
+
+# PyTorch wheels are S3-authoritative: missing paths never probe upstream.
 assert-status GET "$base_url/pytorch-wheels/missing-cache-path/" 404
-assert-upstream-count HEAD "/whl/missing-cache-path" 1
+assert-upstream-count HEAD "/whl/missing-cache-path" 0
 assert-upstream-count GET "/whl/missing-cache-path" 0
 
-assert-status-location \
-	GET \
-	"$base_url/pytorch-wheels/upstream-only/" \
-	302 \
-	"$upstream_url/whl/upstream-only"
-assert-upstream-count HEAD "/whl/upstream-only" 1
-wait-for-body-contains "$s3_url/bucket/pytorch-wheels/upstream-only" "upstream-only cache fixture"
+assert-status GET "$base_url/pytorch-wheels/upstream-only/" 404
+assert-upstream-count HEAD "/whl/upstream-only" 0
+assert-upstream-count GET "/whl/upstream-only" 0
 
-# Query-string requests intentionally bypass classification and cache prefetch.
-assert-status-location \
-	GET \
-	"$base_url/pytorch-wheels/missing-query/?mirror_intel_e2e=1" \
-	302 \
-	"$upstream_url/whl/missing-query?mirror_intel_e2e=1"
+# Query-string requests also stay inside the S3-authoritative route.
+assert-status GET "$base_url/pytorch-wheels/missing-query/?mirror_intel_e2e=1" 404
 assert-upstream-count HEAD "/whl/missing-query" 0
 assert-upstream-count GET "/whl/missing-query" 0
 
-# Redirect-classified paths remain unconditional upstream redirects.
-assert-status-location \
-	GET \
-	"$base_url/pytorch-wheels/missing-redirect.tar.gz" \
-	301 \
-	"$upstream_url/whl/missing-redirect.tar.gz"
+# Archives and installers are also served only when mirror-clone has mirrored them.
+assert-status GET "$base_url/pytorch-wheels/missing-redirect.tar.gz" 404
 assert-upstream-count HEAD "/whl/missing-redirect.tar.gz" 0
 assert-upstream-count GET "/whl/missing-redirect.tar.gz" 0
 
-# Proxy HEAD is currently synthetic and does not contact upstream.
-assert-status HEAD "$base_url/pytorch-wheels/missing-proxy.html" 200
+# Missing HTML pages are not proxied.
+assert-status HEAD "$base_url/pytorch-wheels/missing-proxy.html" 404
 assert-upstream-count HEAD "/whl/missing-proxy.html" 0
 
 assert-status GET "$base_url/nix-channels/store/nix-cache-info" 200

@@ -120,6 +120,13 @@ async fn head_req(client: &reqwest::Client, url: url::Url) -> bool {
     }
 }
 
+/// S3-only existence check: returns `true` if a HEAD request to `url` succeeds.
+///
+/// Unlike `prefetch_cache_action`, this never falls back to upstream.
+pub async fn s3_head_exists(client: &reqwest::Client, url: &url::Url) -> bool {
+    head_req(client, url.clone()).await
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
