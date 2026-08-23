@@ -130,7 +130,9 @@ mod tests {
     use reqwest::Client;
     use tokio::sync::mpsc::channel;
 
-    use crate::common::{Config, EndpointOverride, IntelMission, Metrics, S3Config, Task};
+    use crate::common::{
+        Config, EndpointOverride, IntelMission, Metrics, S3Config, S3Health, Task,
+    };
     use crate::storage::get_anonymous_s3_client;
 
     use super::{PreCacheStatus, PrefetchCache};
@@ -148,10 +150,13 @@ mod tests {
         Config {
             s3: S3Config {
                 name: "test".to_string(),
+                region: "test".to_string(),
                 endpoint: server.base_url(),
                 website_endpoint: server.base_url(),
                 bucket: "bucket".to_string(),
-                sentinel_object_key: None,
+                healthcheck_key_prefix: ".health".to_string(),
+                healthcheck_interval_secs: 300,
+                healthcheck_timeout_secs: 30,
             },
             ..Default::default()
         }
@@ -165,6 +170,7 @@ mod tests {
             client: Client::new(),
             prefetch_client: Client::new(),
             metrics: Arc::new(Metrics::default()),
+            s3_health: S3Health::healthy(),
             s3_client: Arc::new(get_anonymous_s3_client(&config.s3)),
             prefetch_cache,
         }

@@ -29,7 +29,9 @@ impl Task {
         match req.send().await {
             Ok(resp) if resp.status().is_success() => Ok(IntelObject::Cached { task: self, resp }),
             _ => {
-                if let Some(tx) = &mission.tx {
+                if mission.s3_health.is_healthy()
+                    && let Some(tx) = &mission.tx
+                {
                     mission.metrics.task_in_queue.inc();
                     // TODO this may block if the queue is full, which is not good
                     tx.clone()
@@ -255,10 +257,10 @@ mod tests {
     use reqwest::Client;
     use tokio::sync::mpsc::{Receiver, channel};
 
-    use crate::common::{IntelObject, IntelResponse, S3Config, Task};
+    use crate::common::{IntelObject, IntelResponse, S3Config, S3HealthStatus, Task};
     use crate::s3_cache::PrefetchCache;
     use crate::storage::get_anonymous_s3_client;
-    use crate::{Config, IntelMission, Metrics};
+    use crate::{Config, IntelMission, Metrics, S3Health};
 
     async fn with_mock<F, Fut>(f: F)
     where
@@ -269,10 +271,13 @@ mod tests {
         let config = Config {
             s3: S3Config {
                 name: "test".to_string(),
+                region: "test".to_string(),
                 endpoint: "http://localhost:8081".to_string(),
                 website_endpoint: server.base_url(),
                 bucket: "bucket".to_string(),
-                sentinel_object_key: None,
+                healthcheck_key_prefix: ".health".to_string(),
+                healthcheck_interval_secs: 300,
+                healthcheck_timeout_secs: 30,
             },
             ..Default::default()
         };
@@ -286,6 +291,7 @@ mod tests {
             client,
             prefetch_client: Client::new(),
             metrics: Arc::new(Metrics::default()),
+            s3_health: S3Health::healthy(),
             s3_client: Arc::new(get_anonymous_s3_client(&config.s3)),
             prefetch_cache: Arc::new(PrefetchCache::new(Duration::from_secs(60))),
         };
@@ -359,6 +365,25 @@ mod tests {
             let obj = task.resolve(&mission, &config).await.unwrap();
             assert!(matches!(obj, IntelObject::Origin { .. }), "must be origin");
             assert!(rx.try_recv().is_ok(), "must schedule a download");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn must_not_schedule_origin_while_s3_is_degraded() {
+        with_mock(|_server, config, mission, mut rx| async move {
+            mission.s3_health.set(S3HealthStatus::Degraded);
+            let task = Task {
+                storage: "storage",
+                origin: "".to_string(),
+                path: "test".to_string(),
+                retry_limit: 0,
+            };
+
+            let obj = task.resolve(&mission, &config).await.unwrap();
+
+            assert!(matches!(obj, IntelObject::Origin { .. }), "must be origin");
+            assert!(rx.try_recv().is_err(), "must not schedule a download");
         })
         .await;
     }

@@ -8,8 +8,8 @@ use thiserror::Error;
 
 type PutObjectSdkError =
     aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::put_object::PutObjectError>;
-type GetObjectSdkError =
-    aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>;
+type DeleteObjectSdkError =
+    aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::delete_object::DeleteObjectError>;
 type ListObjectsSdkError =
     aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::list_objects::ListObjectsError>;
 
@@ -33,8 +33,8 @@ pub enum Error {
     InvalidRequest,
     #[error("Put Object Error {0}")]
     PutObject(Box<PutObjectSdkError>),
-    #[error("Get Object Error {0}")]
-    GetObjects(Box<GetObjectSdkError>),
+    #[error("Delete Object Error {0}")]
+    DeleteObject(Box<DeleteObjectSdkError>),
     #[error("List Objects Error {0}")]
     ListObjects(Box<ListObjectsSdkError>),
     #[error("Timeout")]
@@ -59,9 +59,9 @@ impl From<PutObjectSdkError> for Error {
         Self::PutObject(Box::new(error))
     }
 }
-impl From<GetObjectSdkError> for Error {
-    fn from(error: GetObjectSdkError) -> Self {
-        Self::GetObjects(Box::new(error))
+impl From<DeleteObjectSdkError> for Error {
+    fn from(error: DeleteObjectSdkError) -> Self {
+        Self::DeleteObject(Box::new(error))
     }
 }
 impl From<ListObjectsSdkError> for Error {

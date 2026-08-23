@@ -20,6 +20,8 @@ in
         ];
         NIX_CACHE_FIXTURE = nixCacheFixture;
         ROCKET_TOML_PATH = "Rocket.toml";
+        AWS_ACCESS_KEY_ID = "test-access-key";
+        AWS_SECRET_ACCESS_KEY = "test-secret-key";
       }
       ''
         cp ${../config/Rocket.toml} Rocket.toml
@@ -39,10 +41,10 @@ in
 
         [default.s3]
         name = "test"
+        region = "test"
         endpoint = "http://127.0.0.1:18081"
         website_endpoint = "http://127.0.0.1:18081"
         bucket = "bucket"
-        sentinel_object_key = "sentinel"
 
         [default.index_crawl]
         refresh_secs = 1

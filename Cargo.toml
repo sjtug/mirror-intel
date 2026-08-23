@@ -9,8 +9,9 @@ version = "0.1.0"
 [dependencies]
 actix-http = "3.12"
 actix-web = { version = "4.13", features = ["macros"] }
-# NOTE: avoid massive deps used by aws-config
-# aws-config = { version = "1", features = ["behavior-version-latest"] }
+# NOTE: avoid massive deps used by aws-config. Load the two environment
+# credentials explicitly instead.
+aws-credential-types = "1.2"
 aws-sdk-s3 = { version = "1.122.0", default-features = false, features = [
   "behavior-version-latest",
   "rt-tokio",

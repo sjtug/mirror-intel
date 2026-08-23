@@ -24,7 +24,7 @@ UPSTREAM_CU130_TORCH = (
 )
 UPSTREAM_ONLY = b"upstream-only cache fixture"
 
-objects = {"sentinel": b"0"}
+objects = {}
 objects_lock = threading.Lock()
 upstream_counts = {}
 upstream_counts_lock = threading.Lock()
@@ -124,6 +124,18 @@ class S3Handler(QuietHandler):
             objects[key] = body
 
         self.send_bytes(200, b"", {"ETag": '"fake-etag"'})
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        if not path.startswith("/bucket/"):
+            self.send_bytes(404, b"not found")
+            return
+
+        key = unquote(path.removeprefix("/bucket/"))
+        with objects_lock:
+            objects.pop(key, None)
+
+        self.send_bytes(204, b"")
 
     def send_object(self, head):
         path = urlparse(self.path).path

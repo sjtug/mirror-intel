@@ -244,6 +244,7 @@ wait-for-connection "$base_url/metrics"
 
 assert-status GET "$base_url/metrics" 200
 assert-body-contains "$base_url/metrics" "resolve_counter"
+assert-body-contains "$base_url/metrics" "s3_put_object_healthy 1"
 
 assert-status GET "$base_url/pytorch-wheels/" 200
 assert-body-contains "$base_url/pytorch-wheels/" "No route for pytorch-wheels."
