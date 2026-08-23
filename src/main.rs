@@ -12,12 +12,12 @@ use tracing_subscriber::{EnvFilter, Registry, fmt};
 
 use artifacts::download_artifacts;
 use browse::list;
-use common::{Config, IntelMission, Metrics};
+use common::{Config, IntelMission, Metrics, S3Health};
 use error::{Error, Result};
 use queue::queue_length;
 use repos::{configure_repo_routes, index};
 use s3_cache::{PrefetchCache, default_head_prefetch_ttl};
-use storage::check_s3;
+use storage::{get_s3_client, initialize_s3_health, mark_s3_degraded, monitor_s3_health};
 use utils::not_found;
 
 use reqwest::{Client, ClientBuilder};
@@ -95,25 +95,37 @@ async fn main() {
 
     let config: Arc<Config> = Arc::new(common::collect_config());
 
-    info!("checking if bucket is available...");
-    // check if credentials are set and we have permissions
-    if !config.read_only
-        && let Err(error) = check_s3(&config.s3).await
-    {
-        warn!(
-            ?error,
-            "s3 storage backend not available, but not running in read-only mode"
-        );
-        // config.read_only = true;
-    }
-
     info!(?config, "config loaded");
+
+    let metrics = Arc::new(Metrics::default());
+    let s3_health = S3Health::default();
+    let s3_upload_client = if config.read_only {
+        None
+    } else {
+        match get_s3_client(&config.s3) {
+            Ok(client) => {
+                info!("checking authenticated S3 PutObject health...");
+                initialize_s3_health(&client, &config.s3, &s3_health, &metrics).await;
+                tokio::spawn(monitor_s3_health(
+                    client.clone(),
+                    config.s3.clone(),
+                    s3_health.clone(),
+                    metrics.clone(),
+                ));
+                Some(client)
+            }
+            Err(error) => {
+                mark_s3_degraded(&s3_health, &metrics, &error);
+                None
+            }
+        }
+    };
 
     info!("starting server...");
 
-    let metrics = Arc::new(Metrics::default());
     let metrics_download = metrics.clone();
-    let tx = (!config.read_only).then(|| {
+    let s3_health_download = s3_health.clone();
+    let tx = s3_upload_client.map(|s3_client| {
         // NOTE: The global bounded channel (`max_pending_task` capacity) can deadlock
         // under heavy load from many large-file requests. See issue #24.
         let (tx, rx) = channel(config.max_pending_task);
@@ -122,7 +134,15 @@ async fn main() {
 
         // Spawn caching future.
         tokio::spawn(async move {
-            download_artifacts(rx, Client::new(), config_download, metrics_download).await;
+            download_artifacts(
+                rx,
+                Client::new(),
+                config_download,
+                metrics_download,
+                s3_health_download,
+                s3_client,
+            )
+            .await;
         });
 
         tx
@@ -151,6 +171,7 @@ async fn main() {
         client,
         prefetch_client,
         metrics,
+        s3_health,
         s3_client: Arc::new(storage::get_anonymous_s3_client(&config.s3)),
         prefetch_cache,
     };

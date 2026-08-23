@@ -1899,6 +1899,7 @@ version = "0.1.0"
 dependencies = [
  "actix-http",
  "actix-web",
+ "aws-credential-types",
  "aws-sdk-s3",
  "bytes",
  "figment",

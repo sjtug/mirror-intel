@@ -52,7 +52,7 @@ mod tests {
     use crate::common::S3Config;
     use crate::s3_cache::PrefetchCache;
     use crate::storage::get_anonymous_s3_client;
-    use crate::{IntelMission, Metrics, queue_length};
+    use crate::{IntelMission, Metrics, S3Health, queue_length};
 
     async fn make_service(
         metrics: Arc<Metrics>,
@@ -63,6 +63,7 @@ mod tests {
             client: Client::new(),
             prefetch_client: Client::new(),
             metrics,
+            s3_health: S3Health::healthy(),
             s3_client: Arc::new(get_anonymous_s3_client(&s3_config)),
             prefetch_cache: Arc::new(PrefetchCache::new(Duration::from_secs(60))),
         };

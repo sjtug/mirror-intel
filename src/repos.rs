@@ -530,7 +530,7 @@ mod tests {
     use tokio::sync::mpsc::{Receiver, channel};
     use url::Url;
 
-    use crate::common::{Config, EndpointOverride, IntelMission, Metrics};
+    use crate::common::{Config, EndpointOverride, IntelMission, Metrics, S3Health};
     use crate::s3_cache::PrefetchCache;
     use crate::{list, not_found, queue_length, storage::get_anonymous_s3_client};
 
@@ -600,6 +600,7 @@ mod tests {
                 .build()
                 .unwrap(),
             metrics: Arc::new(Metrics::default()),
+            s3_health: S3Health::healthy(),
             s3_client: Arc::new(get_anonymous_s3_client(&config.s3)),
             prefetch_cache: Arc::new(PrefetchCache::new(Duration::from_secs(60))),
         };

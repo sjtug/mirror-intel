@@ -12,6 +12,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use tokio::sync::mpsc::Sender;
 use url::Url;
 
@@ -86,6 +87,8 @@ pub struct Metrics {
     pub task_in_queue: Gauge,
     /// Tasks in progress.
     pub task_download: Gauge,
+    /// Whether authenticated S3 PutObject operations are healthy.
+    pub s3_put_object_healthy: Gauge,
 }
 
 impl Default for Metrics {
@@ -105,6 +108,12 @@ impl Default for Metrics {
         let task_in_queue = Gauge::with_opts(Opts::new("task_in_queue", "tasks in queue")).unwrap();
         let task_download =
             Gauge::with_opts(Opts::new("task_download", "tasks processing")).unwrap();
+        let s3_put_object_healthy = Gauge::with_opts(Opts::new(
+            "s3_put_object_healthy",
+            "authenticated S3 PutObject health (-1 not applicable, 0 degraded, 1 healthy)",
+        ))
+        .unwrap();
+        s3_put_object_healthy.set(-1);
 
         Self {
             resolve_counter,
@@ -112,6 +121,7 @@ impl Default for Metrics {
             failed_download_counter,
             task_in_queue,
             task_download,
+            s3_put_object_healthy,
         }
     }
 }
@@ -135,7 +145,55 @@ impl Metrics {
         registry
             .register(Box::new(self.task_download.clone()))
             .unwrap();
+        registry
+            .register(Box::new(self.s3_put_object_healthy.clone()))
+            .unwrap();
         registry.gather()
+    }
+}
+
+/// Authenticated S3 upload health.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum S3HealthStatus {
+    Unknown = 0,
+    Healthy = 1,
+    Degraded = 2,
+}
+
+/// Shared authenticated S3 upload health state.
+#[derive(Clone, Debug, Default)]
+pub struct S3Health {
+    status: Arc<AtomicU8>,
+}
+
+impl S3Health {
+    pub fn status(&self) -> S3HealthStatus {
+        match self.status.load(Ordering::Acquire) {
+            1 => S3HealthStatus::Healthy,
+            2 => S3HealthStatus::Degraded,
+            _ => S3HealthStatus::Unknown,
+        }
+    }
+
+    pub fn is_healthy(&self) -> bool {
+        self.status() == S3HealthStatus::Healthy
+    }
+
+    /// Set the current status and return the previous status.
+    pub fn set(&self, status: S3HealthStatus) -> S3HealthStatus {
+        match self.status.swap(status as u8, Ordering::AcqRel) {
+            1 => S3HealthStatus::Healthy,
+            2 => S3HealthStatus::Degraded,
+            _ => S3HealthStatus::Unknown,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn healthy() -> Self {
+        let health = Self::default();
+        health.set(S3HealthStatus::Healthy);
+        health
     }
 }
 
@@ -154,6 +212,8 @@ pub struct IntelMission {
     pub prefetch_client: Client,
     /// Prometheus metrics.
     pub metrics: Arc<Metrics>,
+    /// Authenticated S3 upload health. New cache fills are paused while degraded.
+    pub s3_health: S3Health,
     /// S3 client.
     ///
     /// This is an anonymous client.
@@ -206,19 +266,45 @@ pub struct Endpoints {
     pub s3_only: Vec<String>,
 }
 
+fn default_s3_region() -> String {
+    "default".to_string()
+}
+
+fn default_s3_healthcheck_key_prefix() -> String {
+    ".sjtug-mirror-intel-health".to_string()
+}
+
+const fn default_s3_healthcheck_interval_secs() -> u64 {
+    300
+}
+
+const fn default_s3_healthcheck_timeout_secs() -> u64 {
+    30
+}
+
 /// Configuration for S3 storage.
 #[derive(Default, Clone, Deserialize, Debug, Eq, PartialEq)]
 pub struct S3Config {
     /// Name of the S3 storage.
     pub name: String,
+    /// SigV4 signing region.
+    #[serde(default = "default_s3_region")]
+    pub region: String,
     /// S3 endpoint of the storage service.
     pub endpoint: String,
     /// Website endpoint of the S3 service.
     pub website_endpoint: String,
     /// Bucket name.
     pub bucket: String,
-    /// [Test only] Object key used by get-object to check S3 availability.
-    pub sentinel_object_key: Option<String>,
+    /// Prefix for temporary PutObject health-check keys.
+    #[serde(default = "default_s3_healthcheck_key_prefix")]
+    pub healthcheck_key_prefix: String,
+    /// Delay between PutObject health checks.
+    #[serde(default = "default_s3_healthcheck_interval_secs")]
+    pub healthcheck_interval_secs: u64,
+    /// Timeout for each health-check PutObject/DeleteObject operation.
+    #[serde(default = "default_s3_healthcheck_timeout_secs")]
+    pub healthcheck_timeout_secs: u64,
 }
 
 /// Configuration for Github Release endpoint.
@@ -443,13 +529,13 @@ mod tests {
 
                 s3: S3Config {
                     name: "jCloud S3".into(),
+                    region: "sjtug".into(),
                     endpoint: "https://s3.jcloud.sjtu.edu.cn".into(),
                     website_endpoint: "https://s3.jcloud.sjtu.edu.cn".into(),
                     bucket: "899a892efef34b1b944a19981040f55b-oss01".into(),
-                    sentinel_object_key: Some(
-                        "sjtug-internal/mirror-intel/releases/download/v0.1.35/mirror-intel.tar.gz"
-                            .into(),
-                    ),
+                    healthcheck_key_prefix: ".sjtug-mirror-intel-health".into(),
+                    healthcheck_interval_secs: 300,
+                    healthcheck_timeout_secs: 30,
                 },
                 user_agent: "mirror-intel / 0.1 (siyuan.internal.sjtug.org)".into(),
                 file_threshold_mb: 4,

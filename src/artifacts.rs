@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use actix_web::http::StatusCode;
+use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use reqwest::{Client, Response};
@@ -17,9 +18,9 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tracing::{info, instrument, warn};
 use url::Url;
 
-use crate::common::{Config, Metrics, Task};
+use crate::common::{Config, Metrics, S3Health, Task};
 use crate::error::{Error, Result};
-use crate::storage::stream_to_s3;
+use crate::storage::{mark_s3_degraded, stream_to_s3};
 
 const BYTES_PER_MB: u64 = 1024 * 1024;
 
@@ -127,6 +128,8 @@ struct DownloadCtx<'a> {
     task: Task,
     config: Cow<'a, Arc<Config>>,
     metrics: Cow<'a, Arc<Metrics>>,
+    s3_health: Cow<'a, S3Health>,
+    s3_client: Cow<'a, S3Client>,
     client: Cow<'a, Client>,
     processing_task: Cow<'a, Arc<Mutex<HashSet<Url>>>>,
     fail_tx: Cow<'a, UnboundedSender<Task>>,
@@ -195,6 +198,8 @@ impl<'a> DownloadCtx<'a> {
                 let client = Cow::Owned(self.client.into_owned());
                 let processing_task = Cow::Owned(self.processing_task.into_owned());
                 let metrics = Cow::Owned(self.metrics.into_owned());
+                let s3_health = Cow::Owned(self.s3_health.into_owned());
+                let s3_client = Cow::Owned(self.s3_client.into_owned());
                 let fail_tx = Cow::Owned(self.fail_tx.into_owned());
                 let config = Cow::Owned(self.config.into_owned());
 
@@ -202,6 +207,8 @@ impl<'a> DownloadCtx<'a> {
                     task: self.task,
                     config,
                     metrics,
+                    s3_health,
+                    s3_client,
                     client,
                     processing_task,
                     fail_tx,
@@ -233,7 +240,8 @@ impl DownloadCtx<'static> {
 
         info!("begin stream");
         let config = self.config.into_owned();
-        let task_fut = cache_task(self.task, self.client.into_owned(), &config);
+        let s3_client = self.s3_client.into_owned();
+        let task_fut = cache_task(self.task, self.client.into_owned(), &s3_client, &config);
         let task_fut = tokio::time::timeout(
             std::time::Duration::from_secs(config.download_timeout),
             task_fut,
@@ -243,7 +251,14 @@ impl DownloadCtx<'static> {
             task_new.retry_limit -= 1;
             self.metrics.failed_download_counter.inc();
 
-            if !matches!(err, Error::Http(_)) && !matches!(err, Error::TooLarge) {
+            if matches!(&err, Error::PutObject(_)) {
+                mark_s3_degraded(&self.s3_health, &self.metrics, &err);
+            }
+
+            if self.s3_health.is_healthy()
+                && !matches!(err, Error::Http(_))
+                && !matches!(err, Error::TooLarge)
+            {
                 self.fail_tx.send(task_new).unwrap();
                 self.metrics.task_in_queue.inc();
             }
@@ -267,7 +282,12 @@ impl DownloadCtx<'static> {
 ///
 /// This function does the actual caching part.
 /// It's called in `download_artifact`, which does something like concurrency control and retries.
-async fn cache_task(task: Task, client: Client, config: &Config) -> Result<()> {
+async fn cache_task(
+    task: Task,
+    client: Client,
+    s3_client: &S3Client,
+    config: &Config,
+) -> Result<()> {
     if client
         .head(task.cached_url(config))
         .send()
@@ -288,6 +308,7 @@ async fn cache_task(task: Task, client: Client, config: &Config) -> Result<()> {
     let result = match payload {
         UploadPayload::Memory(body) => {
             stream_to_s3(
+                s3_client,
                 &key,
                 content_length,
                 aws_sdk_s3::primitives::ByteStream::from(body),
@@ -311,7 +332,7 @@ async fn cache_task(task: Task, client: Client, config: &Config) -> Result<()> {
                 }
             };
 
-            let upload = stream_to_s3(&key, content_length, stream, &config.s3).await;
+            let upload = stream_to_s3(s3_client, &key, content_length, stream, &config.s3).await;
             remove_buffer_file(&path).await;
             upload?
         }
@@ -359,6 +380,8 @@ pub async fn download_artifacts(
     client: Client,
     config: Arc<Config>,
     metrics: Arc<Metrics>,
+    s3_health: S3Health,
+    s3_client: S3Client,
 ) {
     let sem = Arc::new(Semaphore::new(config.concurrent_download));
     let processing_task = Arc::new(Mutex::new(HashSet::new()));
@@ -368,6 +391,11 @@ pub async fn download_artifacts(
         val = fail_rx.recv() => val,
         val = rx.recv() => val
     } {
+        if !s3_health.is_healthy() {
+            metrics.task_in_queue.dec();
+            continue;
+        }
+
         let mut task: Task = task; // Work around intelliRust bug.
 
         // Apply override rules on the task.
@@ -377,6 +405,8 @@ pub async fn download_artifacts(
             task,
             config: Cow::Borrowed(&config),
             metrics: Cow::Borrowed(&metrics),
+            s3_health: Cow::Borrowed(&s3_health),
+            s3_client: Cow::Borrowed(&s3_client),
             client: Cow::Borrowed(&client),
             processing_task: Cow::Borrowed(&processing_task),
             fail_tx: Cow::Borrowed(&fail_tx),
