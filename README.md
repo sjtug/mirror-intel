@@ -57,6 +57,22 @@ fills. Read-only instances expose `-1` because authenticated upload health does
 not apply. Status transitions and failed canary cleanup attempts are also
 logged.
 
+## Temporary cache size
+
+Mirror-intel scans `buffer_path` in a background blocking task at startup and
+then every `cache_size_scan_interval_secs` seconds (default: 3600). Prometheus
+scrapes never traverse the directory. The `/metrics` endpoint exposes:
+
+- `mirror_intel_cache_size_bytes`: apparent size of regular files below
+  `buffer_path`;
+- `mirror_intel_cache_size_scan_success`: `1` when the latest scan succeeded,
+  otherwise `0`;
+- `mirror_intel_cache_size_scan_timestamp_seconds`: Unix timestamp of the latest
+  successful scan.
+
+A failed scan preserves the last successful size and timestamp. Symlinks are
+not followed, so scanning cannot leave the configured cache directory.
+
 ## Detail
 
 * mirror-intel will first query if object exists in s3 backend

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use actix_web::{App, HttpServer, guard, web};
 use prometheus::{Encoder, TextEncoder};
@@ -12,6 +13,7 @@ use tracing_subscriber::{EnvFilter, Registry, fmt};
 
 use artifacts::download_artifacts;
 use browse::list;
+use cache_metrics::monitor_cache_size;
 use common::{Config, IntelMission, Metrics, S3Health};
 use error::{Error, Result};
 use queue::queue_length;
@@ -24,6 +26,7 @@ use reqwest::{Client, ClientBuilder};
 
 mod artifacts;
 mod browse;
+mod cache_metrics;
 mod common;
 mod error;
 mod intel_path;
@@ -98,6 +101,11 @@ async fn main() {
     info!(?config, "config loaded");
 
     let metrics = Arc::new(Metrics::default());
+    tokio::spawn(monitor_cache_size(
+        config.buffer_path.clone(),
+        Duration::from_secs(config.cache_size_scan_interval_secs.max(1)),
+        metrics.clone(),
+    ));
     let s3_health = S3Health::default();
     let s3_upload_client = if config.read_only {
         None

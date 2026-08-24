@@ -89,6 +89,12 @@ pub struct Metrics {
     pub task_download: Gauge,
     /// Whether authenticated S3 PutObject operations are healthy.
     pub s3_put_object_healthy: Gauge,
+    /// Apparent size of files in the temporary cache directory.
+    pub mirror_intel_cache_size_bytes: Gauge,
+    /// Whether the latest temporary cache size scan succeeded.
+    pub mirror_intel_cache_size_scan_success: Gauge,
+    /// Unix timestamp of the latest successful temporary cache size scan.
+    pub mirror_intel_cache_size_scan_timestamp_seconds: Gauge,
 }
 
 impl Default for Metrics {
@@ -114,6 +120,21 @@ impl Default for Metrics {
         ))
         .unwrap();
         s3_put_object_healthy.set(-1);
+        let mirror_intel_cache_size_bytes = Gauge::with_opts(Opts::new(
+            "mirror_intel_cache_size_bytes",
+            "apparent size of files in the temporary cache directory",
+        ))
+        .unwrap();
+        let mirror_intel_cache_size_scan_success = Gauge::with_opts(Opts::new(
+            "mirror_intel_cache_size_scan_success",
+            "whether the latest temporary cache size scan succeeded",
+        ))
+        .unwrap();
+        let mirror_intel_cache_size_scan_timestamp_seconds = Gauge::with_opts(Opts::new(
+            "mirror_intel_cache_size_scan_timestamp_seconds",
+            "unix timestamp of the latest successful temporary cache size scan",
+        ))
+        .unwrap();
 
         Self {
             resolve_counter,
@@ -122,6 +143,9 @@ impl Default for Metrics {
             task_in_queue,
             task_download,
             s3_put_object_healthy,
+            mirror_intel_cache_size_bytes,
+            mirror_intel_cache_size_scan_success,
+            mirror_intel_cache_size_scan_timestamp_seconds,
         }
     }
 }
@@ -147,6 +171,17 @@ impl Metrics {
             .unwrap();
         registry
             .register(Box::new(self.s3_put_object_healthy.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(self.mirror_intel_cache_size_bytes.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(self.mirror_intel_cache_size_scan_success.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(
+                self.mirror_intel_cache_size_scan_timestamp_seconds.clone(),
+            ))
             .unwrap();
         registry.gather()
     }
@@ -282,6 +317,10 @@ const fn default_s3_healthcheck_timeout_secs() -> u64 {
     30
 }
 
+const fn default_cache_size_scan_interval_secs() -> u64 {
+    3600
+}
+
 /// Configuration for S3 storage.
 #[derive(Default, Clone, Deserialize, Debug, Eq, PartialEq)]
 pub struct S3Config {
@@ -362,6 +401,9 @@ pub struct Config {
     pub github_release: GithubReleaseConfig,
     /// Path of temporary buffer directory.
     pub buffer_path: PathBuf,
+    /// Delay between temporary cache directory size scans.
+    #[serde(default = "default_cache_size_scan_interval_secs")]
+    pub cache_size_scan_interval_secs: u64,
     /// Worker tasks to serve requests.
     pub workers: Option<usize>,
     /// TTL in seconds for positive S3/upstream HEAD prefetch entries.
@@ -549,6 +591,7 @@ mod tests {
                     allow: vec!["sjtug/lug/".into(), "FreeCAD/FreeCAD/".into()],
                 },
                 buffer_path: "/mnt/cache/".into(),
+                cache_size_scan_interval_secs: 3600,
                 workers: None,
                 head_prefetch_cache_ttl_secs: None,
             };
