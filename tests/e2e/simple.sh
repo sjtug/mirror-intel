@@ -246,51 +246,38 @@ assert-status GET "$base_url/metrics" 200
 assert-body-contains "$base_url/metrics" "resolve_counter"
 assert-body-contains "$base_url/metrics" "s3_put_object_healthy 1"
 
+# Generated PyPA Simple Repository indexes are served from S3 and selected by Accept.
 assert-status GET "$base_url/pytorch-wheels/" 200
-assert-body-contains "$base_url/pytorch-wheels/" "No route for pytorch-wheels."
+assert-body-contains "$base_url/pytorch-wheels/" 'href="torch/"'
+if ! curl --silent --show-error --fail \
+	--header 'Accept: application/vnd.pypi.simple.v1+json' \
+	"$base_url/pytorch-wheels/" | grep --fixed-strings --quiet '"projects":[{"name":"torch"}]'; then
+	echo "FAIL PyTorch root did not serve PEP 691 JSON" >&2
+	exit 1
+fi
 
-assert-status-location \
-	GET \
-	"$base_url/pytorch-wheels/torch/?mirror_intel_e2e=1" \
-	302 \
-	"$upstream_url/whl/torch?mirror_intel_e2e=1"
-
-assert-status-location \
-	GET \
-	"$base_url/pytorch-wheels/cu130/torch/?mirror_intel_e2e=1" \
-	302 \
-	"$upstream_url/whl/cu130/torch?mirror_intel_e2e=1"
-
-wait-for-status GET "$base_url/pytorch-wheels/cu130/torch/" 302
-wait-for-body-contains "$base_url/pytorch-wheels/cu130/torch/" "cu130 torch cached directory index"
-
+assert-status GET "$base_url/pytorch-wheels/torch/" 200
+assert-body-contains "$base_url/pytorch-wheels/torch/" "Links for torch"
+assert-status GET "$base_url/pytorch-wheels/cu130/" 200
 assert-status GET "$base_url/pytorch-wheels/cu130/torch/" 200
-assert-body-contains "$base_url/pytorch-wheels/cu130/torch/" "cu130 torch cached directory index"
-assert-body-contains "$s3_url/bucket/pytorch-wheels/cu130/torch" "cu130 torch cached directory index"
-assert-status HEAD "$base_url/pytorch-wheels/cu130/torch/" 301
+assert-body-contains "$base_url/pytorch-wheels/cu130/torch/" "Links for cu130 torch"
+assert-status HEAD "$base_url/pytorch-wheels/cu130/torch/" 200
 
-# Cache-classified paths should be guarded by HEAD prefetch before the existing
-# smart-cache path is allowed to enqueue downloads or redirect to upstream.
+# Index misses are S3-authoritative and never probe or cache an upstream page.
 assert-status GET "$base_url/pytorch-wheels/missing-cache-path/" 404
-assert-upstream-count HEAD "/whl/missing-cache-path" 1
+assert-upstream-count HEAD "/whl/missing-cache-path" 0
 assert-upstream-count GET "/whl/missing-cache-path" 0
 
+# Artifacts remain on-demand: the first request redirects upstream and populates S3.
 assert-status-location \
 	GET \
-	"$base_url/pytorch-wheels/upstream-only/" \
+	"$base_url/pytorch-wheels/torch-0.0.1.whl" \
 	302 \
-	"$upstream_url/whl/upstream-only"
-assert-upstream-count HEAD "/whl/upstream-only" 1
-wait-for-body-contains "$s3_url/bucket/pytorch-wheels/upstream-only" "upstream-only cache fixture"
-
-# Query-string requests intentionally bypass classification and cache prefetch.
-assert-status-location \
-	GET \
-	"$base_url/pytorch-wheels/missing-query/?mirror_intel_e2e=1" \
-	302 \
-	"$upstream_url/whl/missing-query?mirror_intel_e2e=1"
-assert-upstream-count HEAD "/whl/missing-query" 0
-assert-upstream-count GET "/whl/missing-query" 0
+	"$upstream_url/whl/torch-0.0.1.whl"
+assert-upstream-count HEAD "/whl/torch-0.0.1.whl" 1
+wait-for-body-contains \
+	"$s3_url/bucket/pytorch-wheels/torch-0.0.1.whl" \
+	"wheel cache fixture"
 
 # Redirect-classified paths remain unconditional upstream redirects.
 assert-status-location \

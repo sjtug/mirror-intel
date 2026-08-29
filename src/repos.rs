@@ -1,11 +1,12 @@
 use std::sync::LazyLock;
 
 use actix_web::http::{Method, StatusCode, Uri};
-use actix_web::{HttpResponse, Route, guard, web};
+use actix_web::{HttpRequest, HttpResponse, Route, Scope, guard, web};
 use regex::Regex;
 
 use crate::error::Result;
 use crate::intel_path::IntelPath;
+use crate::pypi_index;
 use crate::{
     Error,
     common::{Config, Endpoints, IntelMission, IntelResponse, Redirect, Task},
@@ -130,15 +131,12 @@ pub fn classify_with(
 
 /// Classify paths for the pytorch-wheels route.
 ///
-/// * Legacy `.html` find-links pages → [`RouteAction::NotFound`]
-/// * `.whl` files and `#sha256=` fragment links → [`RouteAction::Cache`]
-/// * source archives (`.tar.gz`, `.zip`, `.exe`) → [`RouteAction::Redirect`]
-/// * everything else → [`RouteAction::Cache`]
+/// * Legacy `.html` find-links pages → [`RouteAction::NotFound`].
+/// * Source archives (`.tar.gz`, `.zip`, `.exe`) → [`RouteAction::Redirect`].
+/// * Wheel artifacts and other non-index paths → [`RouteAction::Cache`].
 ///
-/// Directory index pages and unknown paths all use the smart-cache strategy:
-/// HEAD requests are redirected to upstream (cheap revalidation), while GET
-/// requests are resolved through `stream_small_cached` (small HTML listings get
-/// cached, large wheel files are streamed through).
+/// Generated trailing-slash Simple Repository indexes are handled by the more
+/// specific routes registered before this classifier.
 pub fn wheels_route_classify(_config: &Config, path: &str) -> RouteAction {
     if path.ends_with(".html") {
         return RouteAction::NotFound;
@@ -149,15 +147,84 @@ pub fn wheels_route_classify(_config: &Config, path: &str) -> RouteAction {
         return RouteAction::Redirect;
     }
 
-    if let Some((wheel_path, sha256)) = path.split_once("#sha256=")
-        && wheel_path.ends_with(".whl")
-        && sha256.len() == 64
-        && sha256.chars().all(|c| c.is_ascii_hexdigit())
-    {
-        return RouteAction::Cache;
-    }
-
     RouteAction::Cache
+}
+
+/// Mount a generated Simple Repository index and its on-demand artifacts.
+///
+/// Index documents are authoritative in `index_storage`; artifact requests use
+/// the existing smart-cache classifier and may come from a different S3 prefix.
+pub fn pypi_index_scope(
+    public_route: &'static str,
+    index_storage: &'static str,
+    artifact_storage: &'static str,
+    origin_injection: impl Fn(&Endpoints) -> &str + Clone + Send + Sync + 'static,
+    classify: impl Fn(&Config, &str) -> RouteAction + Clone + Send + 'static,
+) -> Scope {
+    let root_handler = move |request: HttpRequest,
+                             intel_mission: web::Data<IntelMission>,
+                             config: web::Data<Config>| async move {
+        if !request.path().ends_with('/') {
+            let mut location = format!("/{public_route}/");
+            if let Some(query) = request.uri().query() {
+                location.push('?');
+                location.push_str(query);
+            }
+            return Ok::<_, Error>(
+                HttpResponse::MovedPermanently()
+                    .insert_header(("Location", location))
+                    .finish()
+                    .into(),
+            );
+        }
+        pypi_index::serve(
+            index_storage,
+            public_route,
+            "",
+            &request,
+            intel_mission,
+            config,
+        )
+        .await
+    };
+    let nested_handler = move |path: IntelPath,
+                               request: HttpRequest,
+                               intel_mission: web::Data<IntelMission>,
+                               config: web::Data<Config>| async move {
+        pypi_index::serve(
+            index_storage,
+            public_route,
+            &path,
+            &request,
+            intel_mission,
+            config,
+        )
+        .await
+    };
+
+    web::scope(&format!("/{public_route}"))
+        .route(
+            "",
+            web::route()
+                .guard(guard::Any(guard::Get()).or(guard::Head()))
+                .to(root_handler),
+        )
+        .route(
+            "/",
+            web::route()
+                .guard(guard::Any(guard::Get()).or(guard::Head()))
+                .to(root_handler),
+        )
+        .route(
+            "/{path:.+}/",
+            web::route()
+                .guard(guard::Any(guard::Get()).or(guard::Head()))
+                .to(nested_handler),
+        )
+        .route(
+            "/{path:.+}",
+            simple_intel(origin_injection, artifact_storage, classify),
+        )
 }
 
 pub fn ostree_allow(_config: &Config, path: &str) -> bool {
@@ -291,14 +358,13 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
                 classify_with(rust_static_allow),
             ),
         )
-        .route(
-            "/pytorch-wheels/{path:.+}",
-            simple_intel(
-                |c| &c.pytorch_wheels,
-                "pytorch-wheels",
-                wheels_route_classify,
-            ),
-        )
+        .service(pypi_index_scope(
+            "pytorch-wheels",
+            "pytorch-wheels/simple",
+            "pytorch-wheels",
+            |c| &c.pytorch_wheels,
+            wheels_route_classify,
+        ))
         .route(
             "/sjtug-internal/{path:.+}",
             simple_intel(
@@ -561,6 +627,58 @@ mod tests {
                 then.status(200).body("");
             })
             .await;
+        let mut _pytorch_mocks = vec![];
+        for (method, path, body) in [
+            (
+                httpmock::Method::GET,
+                "/bucket/pytorch-wheels/simple/index.v1_html",
+                "<a href=\"torch/\">torch</a>",
+            ),
+            (
+                httpmock::Method::GET,
+                "/bucket/pytorch-wheels/simple/index.v1_json",
+                r#"{"meta":{"api-version":"1.0"},"projects":[{"name":"torch"}]}"#,
+            ),
+            (
+                httpmock::Method::GET,
+                "/bucket/pytorch-wheels/simple/torch/index.v1_html",
+                "<h1>Links for torch</h1>",
+            ),
+            (
+                httpmock::Method::GET,
+                "/bucket/pytorch-wheels/simple/torch/index.v1_json",
+                r#"{"meta":{"api-version":"1.1"},"name":"torch","files":[]}"#,
+            ),
+            (
+                httpmock::Method::HEAD,
+                "/bucket/pytorch-wheels/simple/torch/index.v1_html",
+                "",
+            ),
+            (
+                httpmock::Method::HEAD,
+                "/bucket/pytorch-wheels/simple/torch/index.v1_json",
+                "",
+            ),
+            (
+                httpmock::Method::HEAD,
+                "/bucket/pytorch-wheels/simple/typing-extensions/index.v1_html",
+                "",
+            ),
+            (
+                httpmock::Method::GET,
+                "/bucket/test-wheels/simple/index.v1_json",
+                r#"{"meta":{"api-version":"1.0"},"projects":[{"name":"demo"}]}"#,
+            ),
+        ] {
+            _pytorch_mocks.push(
+                server
+                    .mock_async(move |when, then| {
+                        when.method(method).path(path);
+                        then.status(200).body(body);
+                    })
+                    .await,
+            );
+        }
         let sjtug_internal = server.base_url();
         let figment = Figment::new()
             .join(("address", "127.0.0.1"))
@@ -608,14 +726,20 @@ mod tests {
                     }))
                     .to(list),
             )
-            .route(
-                "/pytorch-wheels/{path:.+}",
-                simple_intel(
-                    |c| &c.pytorch_wheels,
-                    "pytorch-wheels",
-                    wheels_route_classify,
-                ),
-            )
+            .service(pypi_index_scope(
+                "pytorch-wheels",
+                "pytorch-wheels/simple",
+                "pytorch-wheels",
+                |c| &c.pytorch_wheels,
+                wheels_route_classify,
+            ))
+            .service(pypi_index_scope(
+                "test-wheels",
+                "test-wheels/simple",
+                "test-wheels",
+                |c| &c.pytorch_wheels,
+                classify_cache_all,
+            ))
             .route(
                 "/sjtug-internal/{path:.+}",
                 simple_intel(
@@ -727,15 +851,8 @@ mod tests {
         }
     }
 
-    fn is_no_route_for(name: &str) -> impl FnOnce(&str) + '_ {
-        move |resp| {
-            assert!(resp.contains(&format!("No route for {}.", name)));
-        }
-    }
-
     #[rstest]
-    #[case("/pytorch-wheels/", is_no_route_for("pytorch-wheels"))]
-    #[case("/pytorch-wheels", is_no_route_for("pytorch-wheels"))]
+    #[case("/pytorch-wheels/", is_index_for("pytorch-wheels"))]
     #[case("/pytorch-wheels/?mirror_intel_list", is_index_for("pytorch-wheels"))]
     #[case("/pytorch-wheels?mirror_intel_list", is_index_for("pytorch-wheels"))]
     #[serial(cwd_env)]
@@ -747,6 +864,98 @@ mod tests {
         let body = body::to_bytes(resp.into_body()).await.unwrap();
         let text = std::str::from_utf8(&body).unwrap();
         assert_f(text);
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn pytorch_root_negotiates_pep_691_json() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/")
+            .insert_header((
+                "Accept",
+                "application/vnd.pypi.simple.v1+json, text/html;q=0.01",
+            ))
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("Content-Type").unwrap(),
+            "application/vnd.pypi.simple.v1+json"
+        );
+        assert_eq!(resp.headers().get("Vary").unwrap(), "Accept");
+        assert_eq!(
+            resp.headers().get("Cache-Control").unwrap(),
+            "public, max-age=300"
+        );
+        let body = body::to_bytes(resp.into_body()).await.unwrap();
+        let json = std::str::from_utf8(&body).unwrap();
+        assert!(json.contains(r#""projects":[{"name":"torch"}]"#));
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn generic_index_scope_serves_an_independent_repository() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/test-wheels/")
+            .insert_header(("Accept", "application/vnd.pypi.simple.v1+json"))
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body::to_bytes(resp.into_body()).await.unwrap();
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains(r#""name":"demo""#)
+        );
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn pytorch_nested_project_serves_generated_html() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/torch/")
+            .insert_header(("Accept", "application/vnd.pypi.simple.v1+html"))
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("Content-Type").unwrap(),
+            "application/vnd.pypi.simple.v1+html; charset=utf-8"
+        );
+        let body = body::to_bytes(resp.into_body()).await.unwrap();
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("Links for torch")
+        );
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn pytorch_project_name_redirects_to_normalized_name() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/Typing_Extensions/")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        assert_eq!(
+            resp.headers().get("Location").unwrap(),
+            "/pytorch-wheels/typing-extensions/"
+        );
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn pytorch_root_without_slash_redirects_to_canonical_url() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get().uri("/pytorch-wheels").to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        assert_eq!(resp.headers().get("Location").unwrap(), "/pytorch-wheels/");
     }
 
     #[serial(cwd_env)]

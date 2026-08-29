@@ -30,6 +30,7 @@ mod cache_metrics;
 mod common;
 mod error;
 mod intel_path;
+mod pypi_index;
 mod queue;
 mod repos;
 mod s3_cache;
