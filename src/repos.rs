@@ -26,6 +26,72 @@ pub enum RouteAction {
     Redirect,
 }
 
+struct SimpleRequest {
+    route: &'static str,
+    origin: String,
+    path: String,
+    action: RouteAction,
+    method: Method,
+    uri: Uri,
+}
+
+async fn simple_intel_response(
+    request: SimpleRequest,
+    intel_mission: web::Data<IntelMission>,
+    config: web::Data<Config>,
+) -> Result<IntelResponse> {
+    let task = Task {
+        storage: request.route,
+        retry_limit: config.max_retries,
+        origin: request.origin,
+        path: request.path,
+    };
+
+    // Rejected paths stay rejected even when a query string is present.
+    if matches!(&request.action, RouteAction::NotFound) {
+        return Ok(HttpResponse::NotFound().finish().into());
+    }
+
+    // Redirect (307) to upstream if any query param exists.
+    // NOTE: use 302 instead of 307
+    if let Some(query) = request.uri.query() {
+        return Ok(Redirect::Temporary(format!("{}?{}", task.upstream_url(), query)).into());
+    }
+
+    match request.action {
+        RouteAction::NotFound => unreachable!("handled before query-string redirect"),
+        // Smart-cache: consults the prefetch cache first. If no entry exists,
+        // returns 404. HEAD requests redirect to origin; GET requests either stream
+        // small cached objects directly or redirect for larger ones.
+        RouteAction::Cache => {
+            if matches!(
+                intel_mission
+                    .prefetch_cache
+                    .prefetch_cache_action(&task, &intel_mission, &config)
+                    .await,
+                PreCacheStatus::None
+            ) {
+                return Ok(HttpResponse::NotFound().finish().into());
+            }
+
+            let resp = if request.method == Method::HEAD {
+                task.resolve_no_content(&intel_mission, &config)
+                    .await?
+                    .redirect(&config)
+                    .into()
+            } else {
+                task.resolve(&intel_mission, &config)
+                    .await?
+                    .stream_small_cached(config.direct_stream_size_kb, &intel_mission, &config)
+                    .await?
+            };
+            Ok(resp)
+        }
+        // Permanent redirect (301) to the upstream URL.
+        RouteAction::Redirect => Ok(Redirect::Permanent(task.upstream_url().to_string()).into()),
+    }
+}
+
 pub fn simple_intel(
     origin_injection: impl Fn(&Endpoints) -> &str + Clone + Send + Sync + 'static,
     route: &'static str,
@@ -41,65 +107,20 @@ pub fn simple_intel(
         async move {
             let origin = origin_injection(&config.endpoints).to_string();
             let path = path.to_string();
-            let task = Task {
-                storage: route,
-                retry_limit: config.max_retries,
-                origin,
-                path,
-            };
-
-            let action = classify(&config, &task.path);
-            // Rejected paths stay rejected even when a query string is present.
-            if matches!(&action, RouteAction::NotFound) {
-                return Ok::<_, Error>(HttpResponse::NotFound().finish().into());
-            }
-
-            // Redirect (307) to upstream if any query param exists.
-            // NOTE: use 302 instead of 307
-            if let Some(query) = uri.query() {
-                return Ok::<_, Error>(
-                    Redirect::Temporary(format!("{}?{}", task.upstream_url(), query)).into(),
-                );
-            }
-
-            match action {
-                RouteAction::NotFound => unreachable!("handled before query-string redirect"),
-                // Smart-cache: consults the prefetch cache first. If no entry exists,
-                // returns 404. HEAD requests redirect to origin; GET requests either stream
-                // small cached objects directly or redirect for larger ones.
-                RouteAction::Cache => {
-                    if matches!(
-                        intel_mission
-                            .prefetch_cache
-                            .prefetch_cache_action(&task, &intel_mission, &config)
-                            .await,
-                        PreCacheStatus::None
-                    ) {
-                        return Ok(HttpResponse::NotFound().finish().into());
-                    }
-
-                    let resp = if method == Method::HEAD {
-                        task.resolve_no_content(&intel_mission, &config)
-                            .await?
-                            .redirect(&config)
-                            .into()
-                    } else {
-                        task.resolve(&intel_mission, &config)
-                            .await?
-                            .stream_small_cached(
-                                config.direct_stream_size_kb,
-                                &intel_mission,
-                                &config,
-                            )
-                            .await?
-                    };
-                    Ok(resp)
-                }
-                // Permanent redirect (301) to the upstream URL.
-                RouteAction::Redirect => {
-                    Ok(Redirect::Permanent(task.upstream_url().to_string()).into())
-                }
-            }
+            let action = classify(&config, &path);
+            simple_intel_response(
+                SimpleRequest {
+                    route,
+                    origin,
+                    path,
+                    action,
+                    method,
+                    uri,
+                },
+                intel_mission,
+                config,
+            )
+            .await
         }
     };
     // Route with handler for GET and HEAD methods, otherwise 404
@@ -201,6 +222,51 @@ pub fn pypi_index_scope(
         )
         .await
     };
+    let slashless_origin = origin_injection.clone();
+    let slashless_classify = classify.clone();
+    let slashless_handler = move |path: IntelPath,
+                                  method: Method,
+                                  uri: Uri,
+                                  intel_mission: web::Data<IntelMission>,
+                                  config: web::Data<Config>| {
+        let origin_injection = slashless_origin.clone();
+        let classify = slashless_classify.clone();
+        async move {
+            let path = path.to_string();
+            if let Some(canonical) =
+                pypi_index::canonical_index_path(index_storage, &path, &intel_mission, &config)
+                    .await?
+            {
+                let mut location = format!("/{public_route}/{canonical}/");
+                if let Some(query) = uri.query() {
+                    location.push('?');
+                    location.push_str(query);
+                }
+                return Ok::<_, Error>(
+                    HttpResponse::MovedPermanently()
+                        .insert_header(("Location", location))
+                        .finish()
+                        .into(),
+                );
+            }
+
+            let origin = origin_injection(&config.endpoints).to_string();
+            let action = classify(&config, &path);
+            simple_intel_response(
+                SimpleRequest {
+                    route: artifact_storage,
+                    origin,
+                    path,
+                    action,
+                    method,
+                    uri,
+                },
+                intel_mission,
+                config,
+            )
+            .await
+        }
+    };
 
     web::scope(&format!("/{public_route}"))
         .route(
@@ -220,6 +286,12 @@ pub fn pypi_index_scope(
             web::route()
                 .guard(guard::Any(guard::Get()).or(guard::Head()))
                 .to(nested_handler),
+        )
+        .route(
+            "/{path:(?:[^/]+/)*[^/.]+}",
+            web::route()
+                .guard(guard::Any(guard::Get()).or(guard::Head()))
+                .to(slashless_handler),
         )
         .route(
             "/{path:.+}",
@@ -364,6 +436,13 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
             "pytorch-wheels",
             |c| &c.pytorch_wheels,
             wheels_route_classify,
+        ))
+        .service(pypi_index_scope(
+            "astral-wheels",
+            "astral-wheels/simple",
+            "astral-wheels",
+            |c| &c.astral_wheels,
+            classify_cache_all,
         ))
         .route(
             "/sjtug-internal/{path:.+}",
@@ -627,7 +706,7 @@ mod tests {
                 then.status(200).body("");
             })
             .await;
-        let mut _pytorch_mocks = vec![];
+        let mut _index_mocks = vec![];
         for (method, path, body) in [
             (
                 httpmock::Method::GET,
@@ -647,7 +726,7 @@ mod tests {
             (
                 httpmock::Method::GET,
                 "/bucket/pytorch-wheels/simple/torch/index.v1_json",
-                r#"{"meta":{"api-version":"1.1"},"name":"torch","files":[]}"#,
+                r#"{"meta":{"api-version":"1.1"},"name":"torch","versions":[],"files":[]}"#,
             ),
             (
                 httpmock::Method::HEAD,
@@ -666,11 +745,11 @@ mod tests {
             ),
             (
                 httpmock::Method::GET,
-                "/bucket/test-wheels/simple/index.v1_json",
-                r#"{"meta":{"api-version":"1.0"},"projects":[{"name":"demo"}]}"#,
+                "/bucket/astral-wheels/simple/cpu/index.v1_json",
+                r#"{"meta":{"api-version":"1.0"},"projects":[{"name":"pyg-lib"}]}"#,
             ),
         ] {
-            _pytorch_mocks.push(
+            _index_mocks.push(
                 server
                     .mock_async(move |when, then| {
                         when.method(method).path(path);
@@ -734,10 +813,10 @@ mod tests {
                 wheels_route_classify,
             ))
             .service(pypi_index_scope(
-                "test-wheels",
-                "test-wheels/simple",
-                "test-wheels",
-                |c| &c.pytorch_wheels,
+                "astral-wheels",
+                "astral-wheels/simple",
+                "astral-wheels",
+                |c| &c.astral_wheels,
                 classify_cache_all,
             ))
             .route(
@@ -895,10 +974,26 @@ mod tests {
 
     #[serial(cwd_env)]
     #[tokio::test]
-    async fn generic_index_scope_serves_an_independent_repository() {
+    async fn latest_json_request_returns_concrete_v1_content_type() {
         let (service, _config, _rx, _server) = make_service().await;
         let req = TestRequest::get()
-            .uri("/test-wheels/")
+            .uri("/pytorch-wheels/")
+            .insert_header(("Accept", "application/vnd.pypi.simple.latest+json"))
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("Content-Type").unwrap(),
+            "application/vnd.pypi.simple.v1+json"
+        );
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn astral_channel_index_scope_serves_an_independent_repository() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/astral-wheels/cpu/")
             .insert_header(("Accept", "application/vnd.pypi.simple.v1+json"))
             .to_request();
         let resp = call_service(&service, req).await;
@@ -907,7 +1002,7 @@ mod tests {
         assert!(
             std::str::from_utf8(&body)
                 .unwrap()
-                .contains(r#""name":"demo""#)
+                .contains(r#""name":"pyg-lib""#)
         );
     }
 
@@ -939,6 +1034,36 @@ mod tests {
         let (service, _config, _rx, _server) = make_service().await;
         let req = TestRequest::get()
             .uri("/pytorch-wheels/Typing_Extensions/")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        assert_eq!(
+            resp.headers().get("Location").unwrap(),
+            "/pytorch-wheels/typing-extensions/"
+        );
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn slashless_project_redirects_to_trailing_slash() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/torch?client=pip")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+        assert_eq!(
+            resp.headers().get("Location").unwrap(),
+            "/pytorch-wheels/torch/?client=pip"
+        );
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn slashless_project_redirects_to_normalized_name() {
+        let (service, _config, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/Typing_Extensions")
             .to_request();
         let resp = call_service(&service, req).await;
         assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);

@@ -250,12 +250,17 @@ assert-body-contains "$base_url/metrics" "s3_put_object_healthy 1"
 assert-status GET "$base_url/pytorch-wheels/" 200
 assert-body-contains "$base_url/pytorch-wheels/" 'href="torch/"'
 if ! curl --silent --show-error --fail \
-	--header 'Accept: application/vnd.pypi.simple.v1+json' \
+	--header 'Accept: application/vnd.pypi.simple.latest+json' \
 	"$base_url/pytorch-wheels/" | grep --fixed-strings --quiet '"projects":[{"name":"torch"}]'; then
-	echo "FAIL PyTorch root did not serve PEP 691 JSON" >&2
+	echo "FAIL PyTorch root did not negotiate latest JSON" >&2
 	exit 1
 fi
 
+assert-status-location \
+	GET \
+	"$base_url/pytorch-wheels/torch" \
+	301 \
+	"/pytorch-wheels/torch/"
 assert-status GET "$base_url/pytorch-wheels/torch/" 200
 assert-body-contains "$base_url/pytorch-wheels/torch/" "Links for torch"
 assert-status GET "$base_url/pytorch-wheels/cu130/" 200
@@ -293,6 +298,25 @@ assert-status HEAD "$base_url/pytorch-wheels/missing-proxy.html" 404
 assert-status GET "$base_url/pytorch-wheels/missing-proxy.html?legacy=1" 404
 assert-upstream-count HEAD "/whl/missing-proxy.html" 0
 assert-upstream-count GET "/whl/missing-proxy.html" 0
+
+# Astral uses the same generated-index serving method with channel indexes.
+assert-status GET "$base_url/astral-wheels/cpu/" 200
+assert-body-contains "$base_url/astral-wheels/cpu/" 'href="pyg-lib/"'
+if ! curl --silent --show-error --fail \
+	--header 'Accept: application/vnd.pypi.simple.v1+json' \
+	"$base_url/astral-wheels/cpu/" | grep --fixed-strings --quiet '"name":"pyg-lib"'; then
+	echo "FAIL Astral CPU channel did not serve PEP 691 JSON" >&2
+	exit 1
+fi
+assert-status-location \
+	GET \
+	"$base_url/astral-wheels/artifacts/flash-attn.whl" \
+	302 \
+	"$upstream_url/astral/artifacts/flash-attn.whl"
+assert-upstream-count HEAD "/astral/artifacts/flash-attn.whl" 1
+wait-for-body-contains \
+	"$s3_url/bucket/astral-wheels/artifacts/flash-attn.whl" \
+	"astral wheel fixture"
 
 assert-status GET "$base_url/nix-channels/store/nix-cache-info" 200
 assert-body-contains "$base_url/nix-channels/store/nix-cache-info" "StoreDir: /nix/store"

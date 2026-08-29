@@ -35,7 +35,7 @@ objects = {
         b'<!DOCTYPE html><h1>Links for torch</h1>'
     ),
     "pytorch-wheels/simple/torch/index.v1_json": (
-        b'{"meta":{"api-version":"1.1"},"name":"torch","files":[]}'
+        b'{"meta":{"api-version":"1.1"},"name":"torch","versions":[],"files":[]}'
     ),
     "pytorch-wheels/simple/cu130/index.v1_html": (
         b'<!DOCTYPE html><a href="torch/">torch</a>'
@@ -47,7 +47,13 @@ objects = {
         b'<!DOCTYPE html><h1>Links for cu130 torch</h1>'
     ),
     "pytorch-wheels/simple/cu130/torch/index.v1_json": (
-        b'{"meta":{"api-version":"1.1"},"name":"torch","files":[]}'
+        b'{"meta":{"api-version":"1.1"},"name":"torch","versions":[],"files":[]}'
+    ),
+    "astral-wheels/simple/cpu/index.v1_html": (
+        b'<!DOCTYPE html><a href="pyg-lib/">pyg-lib</a>'
+    ),
+    "astral-wheels/simple/cpu/index.v1_json": (
+        b'{"meta":{"api-version":"1.0"},"projects":[{"name":"pyg-lib"}]}'
     ),
 }
 objects_lock = threading.Lock()
@@ -115,6 +121,9 @@ class UpstreamHandler(QuietHandler):
         elif path == "/whl/torch-0.0.1.whl":
             record_upstream_request(self.command, path)
             self.send_bytes(200, b"wheel cache fixture", {"Content-Type": "application/octet-stream"})
+        elif path == "/astral/artifacts/flash-attn.whl":
+            record_upstream_request(self.command, path)
+            self.send_bytes(200, b"astral wheel fixture", {"Content-Type": "application/octet-stream"})
         else:
             record_upstream_request(self.command, path)
             self.send_bytes(404, b"not found")
