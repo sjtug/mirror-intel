@@ -37,6 +37,62 @@ impl IndexFormat {
     }
 }
 
+fn media_range_specificity(range: &str, offered: &str) -> Option<u8> {
+    let (range_type, range_subtype) = range.trim().split_once('/')?;
+    let (offered_type, offered_subtype) = offered.split_once('/')?;
+    if range_type == "*" && range_subtype == "*" {
+        return Some(0);
+    }
+    if !range_type.eq_ignore_ascii_case(offered_type) {
+        return None;
+    }
+    if range_subtype == "*" {
+        return Some(1);
+    }
+    range_subtype
+        .eq_ignore_ascii_case(offered_subtype)
+        .then_some(2)
+}
+
+fn quality(value: &str, offered: &[&str]) -> Option<(u8, f32)> {
+    let mut best: Option<(u8, f32)> = None;
+    for item in value.split(',') {
+        let mut parts = item.trim().split(';');
+        let Some(range) = parts.next() else {
+            continue;
+        };
+        let mut item_quality = 1.0;
+        for parameter in parts {
+            let Some((name, value)) = parameter.trim().split_once('=') else {
+                continue;
+            };
+            if name.trim().eq_ignore_ascii_case("q") {
+                item_quality = value
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|quality| (0.0..=1.0).contains(quality))
+                    .unwrap_or(0.0);
+                break;
+            }
+        }
+        let specificity = offered
+            .iter()
+            .filter_map(|media_type| media_range_specificity(range, media_type))
+            .max();
+        if let Some(specificity) = specificity {
+            match &mut best {
+                Some((best_specificity, best_quality)) if *best_specificity == specificity => {
+                    *best_quality = best_quality.max(item_quality);
+                }
+                Some((best_specificity, _)) if *best_specificity > specificity => {}
+                _ => best = Some((specificity, item_quality)),
+            }
+        }
+    }
+    best
+}
+
 fn negotiate(request: &HttpRequest) -> IndexFormat {
     let Some(value) = request
         .headers()
@@ -46,34 +102,39 @@ fn negotiate(request: &HttpRequest) -> IndexFormat {
         return IndexFormat::LegacyHtml;
     };
 
-    let quality = |media_type: &str| -> f32 {
-        value
-            .split(',')
-            .filter_map(|item| {
-                let mut parts = item.trim().split(';');
-                let media = parts.next()?.trim();
-                if !media.eq_ignore_ascii_case(media_type) {
-                    return None;
-                }
-                let q = parts
-                    .find_map(|parameter| {
-                        parameter
-                            .trim()
-                            .strip_prefix("q=")
-                            .and_then(|value| value.parse::<f32>().ok())
-                    })
-                    .unwrap_or(1.0);
-                Some(q)
-            })
-            .fold(0.0, f32::max)
-    };
-
-    let json = quality(JSON_MEDIA_TYPE);
-    let modern_html = quality(HTML_MEDIA_TYPE);
-    let legacy_html = quality("text/html");
-    if json > 0.0 && json >= modern_html.max(legacy_html) {
+    let json = quality(
+        value,
+        &[JSON_MEDIA_TYPE, "application/vnd.pypi.simple.latest+json"],
+    );
+    let modern_html = quality(
+        value,
+        &[HTML_MEDIA_TYPE, "application/vnd.pypi.simple.latest+html"],
+    );
+    let legacy_html = quality(value, &["text/html"]);
+    let max_quality = [json, modern_html, legacy_html]
+        .into_iter()
+        .flatten()
+        .map(|(_, quality)| quality)
+        .fold(0.0, f32::max);
+    if max_quality == 0.0 {
+        return IndexFormat::LegacyHtml;
+    }
+    let max_specificity = [json, modern_html, legacy_html]
+        .into_iter()
+        .flatten()
+        .filter(|(_, quality)| *quality == max_quality)
+        .map(|(specificity, _)| specificity)
+        .max()
+        .unwrap_or_default();
+    // Keep the long-established HTML default for a universal wildcard. More
+    // specific ties prefer the richer JSON representation.
+    if max_specificity == 0
+        && legacy_html.is_some_and(|score| score == (max_specificity, max_quality))
+    {
+        IndexFormat::LegacyHtml
+    } else if json.is_some_and(|score| score == (max_specificity, max_quality)) {
         IndexFormat::Json
-    } else if modern_html > 0.0 && modern_html >= legacy_html {
+    } else if modern_html.is_some_and(|score| score == (max_specificity, max_quality)) {
         IndexFormat::ModernHtml
     } else {
         IndexFormat::LegacyHtml
@@ -156,6 +217,44 @@ async fn fetch_index(
     }))
 }
 
+pub async fn canonical_index_path(
+    storage: &'static str,
+    path: &str,
+    mission: &IntelMission,
+    config: &Config,
+) -> Result<Option<String>> {
+    if fetch_index(
+        storage,
+        path,
+        IndexFormat::ModernHtml,
+        &Method::HEAD,
+        mission,
+        config,
+    )
+    .await?
+    .is_some()
+    {
+        return Ok(Some(path.to_string()));
+    }
+
+    let canonical = canonicalized_path(path);
+    if canonical != path
+        && fetch_index(
+            storage,
+            &canonical,
+            IndexFormat::ModernHtml,
+            &Method::HEAD,
+            mission,
+            config,
+        )
+        .await?
+        .is_some()
+    {
+        return Ok(Some(canonical));
+    }
+    Ok(None)
+}
+
 pub async fn serve(
     storage: &'static str,
     public_route: &'static str,
@@ -225,6 +324,40 @@ mod tests {
             ))
             .to_http_request();
         assert_eq!(negotiate(&request), IndexFormat::Json);
+    }
+
+    #[test]
+    fn negotiates_latest_to_concrete_format() {
+        let json = TestRequest::default()
+            .insert_header((header::ACCEPT, "application/vnd.pypi.simple.latest+json"))
+            .to_http_request();
+        assert_eq!(negotiate(&json), IndexFormat::Json);
+
+        let html = TestRequest::default()
+            .insert_header((header::ACCEPT, "application/vnd.pypi.simple.latest+html"))
+            .to_http_request();
+        assert_eq!(negotiate(&html), IndexFormat::ModernHtml);
+    }
+
+    #[test]
+    fn negotiates_media_ranges_and_specific_exclusions() {
+        let application = TestRequest::default()
+            .insert_header((header::ACCEPT, "application/*"))
+            .to_http_request();
+        assert_eq!(negotiate(&application), IndexFormat::Json);
+
+        let excluded_json = TestRequest::default()
+            .insert_header((
+                header::ACCEPT,
+                "application/vnd.pypi.simple.v1+json;q=0, application/*;q=0.8",
+            ))
+            .to_http_request();
+        assert_eq!(negotiate(&excluded_json), IndexFormat::ModernHtml);
+
+        let any = TestRequest::default()
+            .insert_header((header::ACCEPT, "*/*"))
+            .to_http_request();
+        assert_eq!(negotiate(&any), IndexFormat::LegacyHtml);
     }
 
     #[test]

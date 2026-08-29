@@ -38,6 +38,7 @@ in
         [default.endpoints]
         nix_channels_store = "http://127.0.0.1:18082"
         pytorch_wheels = "http://127.0.0.1:18080/whl"
+        astral_wheels = "http://127.0.0.1:18080/astral"
 
         [default.s3]
         name = "test"
