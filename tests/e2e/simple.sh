@@ -301,9 +301,11 @@ assert-status-location \
 assert-upstream-count HEAD "/whl/missing-redirect.tar.gz" 0
 assert-upstream-count GET "/whl/missing-redirect.tar.gz" 0
 
-# Proxy HEAD is currently synthetic and does not contact upstream.
-assert-status HEAD "$base_url/pytorch-wheels/missing-proxy.html" 200
+# Legacy find-links HTML pages are not served or fetched from upstream.
+assert-status HEAD "$base_url/pytorch-wheels/missing-proxy.html" 404
+assert-status GET "$base_url/pytorch-wheels/missing-proxy.html?legacy=1" 404
 assert-upstream-count HEAD "/whl/missing-proxy.html" 0
+assert-upstream-count GET "/whl/missing-proxy.html" 0
 
 assert-status GET "$base_url/nix-channels/store/nix-cache-info" 200
 assert-body-contains "$base_url/nix-channels/store/nix-cache-info" "StoreDir: /nix/store"

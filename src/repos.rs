@@ -15,10 +15,8 @@ use crate::{
 
 /// Routing decision returned by a `classify` closure in [`simple_intel`].
 pub enum RouteAction {
-    /// Reverse-proxy the request to upstream.
-    /// NOTE: This should only be used for frequently-updated files,
-    /// such as HTML index, in case of restricted network traffic.
-    Proxy,
+    /// Return 404 without consulting S3 or upstream.
+    NotFound,
     /// Follow the smart-cache strategy (redirect HEAD, stream or cache GET).
     /// NOTE: Due to S3 API restriction, this is often paired with a
     /// prefetch cache to fix response code inconsistency.
@@ -49,6 +47,12 @@ pub fn simple_intel(
                 path,
             };
 
+            let action = classify(&config, &task.path);
+            // Rejected paths stay rejected even when a query string is present.
+            if matches!(&action, RouteAction::NotFound) {
+                return Ok::<_, Error>(HttpResponse::NotFound().finish().into());
+            }
+
             // Redirect (307) to upstream if any query param exists.
             // NOTE: use 302 instead of 307
             if let Some(query) = uri.query() {
@@ -57,20 +61,8 @@ pub fn simple_intel(
                 );
             }
 
-            match classify(&config, &task.path) {
-                // Reverse-proxy: HEAD returns 200 OK with no body; GET fetches
-                // upstream and streams the response back.
-                RouteAction::Proxy => {
-                    let resp = if method == Method::HEAD {
-                        HttpResponse::Ok().finish().into()
-                    } else {
-                        task.resolve_upstream()
-                            .reverse_proxy(&intel_mission)
-                            .await?
-                            .into()
-                    };
-                    Ok(resp)
-                }
+            match action {
+                RouteAction::NotFound => unreachable!("handled before query-string redirect"),
                 // Smart-cache: consults the prefetch cache first. If no entry exists,
                 // returns 404. HEAD requests redirect to origin; GET requests either stream
                 // small cached objects directly or redirect for larger ones.
@@ -138,7 +130,7 @@ pub fn classify_with(
 
 /// Classify paths for the pytorch-wheels route.
 ///
-/// * `.html` files → [`RouteAction::Proxy`]  (reverse-proxy upstream for freshness)
+/// * Legacy `.html` find-links pages → [`RouteAction::NotFound`]
 /// * `.whl` files and `#sha256=` fragment links → [`RouteAction::Cache`]
 /// * source archives (`.tar.gz`, `.zip`, `.exe`) → [`RouteAction::Redirect`]
 /// * everything else → [`RouteAction::Cache`]
@@ -149,7 +141,7 @@ pub fn classify_with(
 /// cached, large wheel files are streamed through).
 pub fn wheels_route_classify(_config: &Config, path: &str) -> RouteAction {
     if path.ends_with(".html") {
-        return RouteAction::Proxy;
+        return RouteAction::NotFound;
     }
 
     // Source archives and Windows installers — redirect to upstream.
@@ -846,10 +838,10 @@ mod tests {
     #[test]
     fn test_wheels_route_classify() {
         let config = Config::default();
-        // .html files are proxied
+        // Legacy find-links pages are no longer served.
         assert!(matches!(
             wheels_route_classify(&config, "torch_stable.html"),
-            RouteAction::Proxy
+            RouteAction::NotFound
         ));
         // .whl files are cached
         assert!(matches!(
@@ -921,8 +913,7 @@ mod tests {
 
     #[serial(cwd_env)]
     #[tokio::test]
-    async fn test_proxy_head() {
-        // proxied HEAD path should return 200 directly.
+    async fn test_legacy_find_links_removed() {
         let (service, _, _rx, _server) = make_service().await;
         let object = Task {
             storage: "pytorch-wheels",
@@ -935,7 +926,13 @@ mod tests {
             .uri(object.root_path().as_str())
             .to_request();
         let resp = call_service(&service, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let req = TestRequest::get()
+            .uri(&format!("{}?legacy=1", object.root_path()))
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
