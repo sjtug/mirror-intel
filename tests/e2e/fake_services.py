@@ -24,7 +24,32 @@ UPSTREAM_CU130_TORCH = (
 )
 UPSTREAM_ONLY = b"upstream-only cache fixture"
 
-objects = {}
+objects = {
+    "pytorch-wheels/simple/index.v1_html": (
+        b'<!DOCTYPE html><a href="torch/">torch</a>'
+    ),
+    "pytorch-wheels/simple/index.v1_json": (
+        b'{"meta":{"api-version":"1.0"},"projects":[{"name":"torch"}]}'
+    ),
+    "pytorch-wheels/simple/torch/index.v1_html": (
+        b'<!DOCTYPE html><h1>Links for torch</h1>'
+    ),
+    "pytorch-wheels/simple/torch/index.v1_json": (
+        b'{"meta":{"api-version":"1.1"},"name":"torch","files":[]}'
+    ),
+    "pytorch-wheels/simple/cu130/index.v1_html": (
+        b'<!DOCTYPE html><a href="torch/">torch</a>'
+    ),
+    "pytorch-wheels/simple/cu130/index.v1_json": (
+        b'{"meta":{"api-version":"1.0"},"projects":[{"name":"torch"}]}'
+    ),
+    "pytorch-wheels/simple/cu130/torch/index.v1_html": (
+        b'<!DOCTYPE html><h1>Links for cu130 torch</h1>'
+    ),
+    "pytorch-wheels/simple/cu130/torch/index.v1_json": (
+        b'{"meta":{"api-version":"1.1"},"name":"torch","files":[]}'
+    ),
+}
 objects_lock = threading.Lock()
 upstream_counts = {}
 upstream_counts_lock = threading.Lock()
@@ -87,6 +112,9 @@ class UpstreamHandler(QuietHandler):
         elif path in ("/whl/upstream-only", "/whl/upstream-only/"):
             record_upstream_request(self.command, "/whl/upstream-only")
             self.send_bytes(200, UPSTREAM_ONLY, {"Content-Type": "text/plain"})
+        elif path == "/whl/torch-0.0.1.whl":
+            record_upstream_request(self.command, path)
+            self.send_bytes(200, b"wheel cache fixture", {"Content-Type": "application/octet-stream"})
         else:
             record_upstream_request(self.command, path)
             self.send_bytes(404, b"not found")
