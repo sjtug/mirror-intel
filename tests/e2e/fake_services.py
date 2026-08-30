@@ -22,6 +22,7 @@ UPSTREAM_CU130_TORCH = (
     b"""<!DOCTYPE html><html><body>cu130 torch cached directory index"""
     b"""<a href="torch-0.0.1+cu130.whl">torch</a></body></html>"""
 )
+UPSTREAM_TORCH_STABLE = b"legacy torch_stable.html find-links fixture"
 UPSTREAM_ONLY = b"upstream-only cache fixture"
 
 objects = {
@@ -118,6 +119,9 @@ class UpstreamHandler(QuietHandler):
         elif path in ("/whl/upstream-only", "/whl/upstream-only/"):
             record_upstream_request(self.command, "/whl/upstream-only")
             self.send_bytes(200, UPSTREAM_ONLY, {"Content-Type": "text/plain"})
+        elif path == "/whl/torch_stable.html":
+            record_upstream_request(self.command, path)
+            self.send_bytes(200, UPSTREAM_TORCH_STABLE, {"Content-Type": "text/html"})
         elif path == "/whl/torch-0.0.1.whl":
             record_upstream_request(self.command, path)
             self.send_bytes(200, b"wheel cache fixture", {"Content-Type": "application/octet-stream"})

@@ -18,6 +18,8 @@ use crate::{
 pub enum RouteAction {
     /// Return 404 without consulting S3 or upstream.
     NotFound,
+    /// Reverse-proxy GET from upstream and return an empty 200 response to HEAD.
+    Proxy,
     /// Follow the smart-cache strategy (redirect HEAD, stream or cache GET).
     /// NOTE: Due to S3 API restriction, this is often paired with a
     /// prefetch cache to fix response code inconsistency.
@@ -60,6 +62,19 @@ async fn simple_intel_response(
 
     match request.action {
         RouteAction::NotFound => unreachable!("handled before query-string redirect"),
+        // Preserve legacy find-links behavior: GET proxies the upstream HTML while
+        // HEAD reports availability without contacting upstream.
+        RouteAction::Proxy => {
+            let resp = if request.method == Method::HEAD {
+                HttpResponse::Ok().finish().into()
+            } else {
+                task.resolve_upstream()
+                    .reverse_proxy(&intel_mission)
+                    .await?
+                    .into()
+            };
+            Ok(resp)
+        }
         // Smart-cache: consults the prefetch cache first. If no entry exists,
         // returns 404. HEAD requests redirect to origin; GET requests either stream
         // small cached objects directly or redirect for larger ones.
@@ -152,13 +167,17 @@ pub fn classify_with(
 
 /// Classify paths for the pytorch-wheels route.
 ///
-/// * Legacy `.html` find-links pages → [`RouteAction::NotFound`].
+/// * Exact legacy `torch_stable.html` find-links page → [`RouteAction::Proxy`].
+/// * Other legacy `.html` find-links pages → [`RouteAction::NotFound`].
 /// * Source archives (`.tar.gz`, `.zip`, `.exe`) → [`RouteAction::Redirect`].
 /// * Wheel artifacts and other non-index paths → [`RouteAction::Cache`].
 ///
 /// Generated trailing-slash Simple Repository indexes are handled by the more
 /// specific routes registered before this classifier.
 pub fn wheels_route_classify(_config: &Config, path: &str) -> RouteAction {
+    if path == "torch_stable.html" {
+        return RouteAction::Proxy;
+    }
     if path.ends_with(".html") {
         return RouteAction::NotFound;
     }
@@ -745,6 +764,11 @@ mod tests {
             ),
             (
                 httpmock::Method::GET,
+                "/whl/torch_stable.html",
+                "legacy torch find-links",
+            ),
+            (
+                httpmock::Method::GET,
                 "/bucket/astral-wheels/simple/cpu/index.v1_json",
                 r#"{"meta":{"api-version":"1.0"},"projects":[{"name":"pyg-lib"}]}"#,
             ),
@@ -773,6 +797,7 @@ mod tests {
             .merge(Toml::file(crate::common::rocket_toml_path()).nested());
         let mut config: Config = figment.extract().expect("config");
         config.read_only = true;
+        config.endpoints.pytorch_wheels = format!("{}/whl", server.base_url());
         let config = Arc::new(config);
 
         let (tx, rx) = channel(1024);
@@ -1172,9 +1197,14 @@ mod tests {
     #[test]
     fn test_wheels_route_classify() {
         let config = Config::default();
-        // Legacy find-links pages are no longer served.
+        // The exact historical find-links page keeps its reverse-proxy behavior.
         assert!(matches!(
             wheels_route_classify(&config, "torch_stable.html"),
+            RouteAction::Proxy
+        ));
+        // Other legacy HTML pages are not dynamically proxied.
+        assert!(matches!(
+            wheels_route_classify(&config, "other.html"),
             RouteAction::NotFound
         ));
         // .whl files are cached
@@ -1247,23 +1277,54 @@ mod tests {
 
     #[serial(cwd_env)]
     #[tokio::test]
-    async fn test_legacy_find_links_removed() {
+    async fn legacy_torch_stable_get_reverse_proxies_upstream() {
         let (service, _, _rx, _server) = make_service().await;
-        let object = Task {
-            storage: "pytorch-wheels",
-            origin: "https://download.pytorch.org/whl".to_string(),
-            path: "torch_stable.html".to_string(),
-            retry_limit: 3,
-        };
-        let req = TestRequest::default()
-            .method(Method::HEAD)
-            .uri(object.root_path().as_str())
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/torch_stable.html")
             .to_request();
         let resp = call_service(&service, req).await;
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body::to_bytes(resp.into_body()).await.unwrap();
+        assert_eq!(body, "legacy torch find-links");
+    }
 
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn legacy_torch_stable_head_returns_ok() {
+        let (service, _, _rx, _server) = make_service().await;
+        let req = TestRequest::default()
+            .method(Method::HEAD)
+            .uri("/pytorch-wheels/torch_stable.html")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(!resp.headers().contains_key("Location"));
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn legacy_torch_stable_query_redirects_upstream() {
+        let (service, config, _rx, _server) = make_service().await;
         let req = TestRequest::get()
-            .uri(&format!("{}?legacy=1", object.root_path()))
+            .uri("/pytorch-wheels/torch_stable.html?legacy=1")
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::FOUND);
+        assert_eq!(
+            resp.headers().get("Location").unwrap().to_str().unwrap(),
+            format!(
+                "{}/torch_stable.html?legacy=1",
+                config.endpoints.pytorch_wheels
+            )
+        );
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn other_legacy_html_remains_not_found_with_query() {
+        let (service, _, _rx, _server) = make_service().await;
+        let req = TestRequest::get()
+            .uri("/pytorch-wheels/other.html?legacy=1")
             .to_request();
         let resp = call_service(&service, req).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
