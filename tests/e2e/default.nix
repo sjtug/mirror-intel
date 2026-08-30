@@ -37,8 +37,12 @@ in
 
         [default.endpoints]
         nix_channels_store = "http://127.0.0.1:18082"
+        pypi_packages = "http://127.0.0.1:18080/pypi/packages"
         pytorch_wheels = "http://127.0.0.1:18080/whl"
         astral_wheels = "http://127.0.0.1:18080/astral"
+        overrides = [
+          { name = "pythonhosted-test", pattern = "https://files.pythonhosted.org/packages", replace = "http://127.0.0.1:18080/pythonhosted/packages" },
+        ]
 
         [default.s3]
         name = "test"

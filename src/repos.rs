@@ -14,6 +14,9 @@ use crate::{
     utils,
 };
 
+// NOTE: modify this to use alternative base URL to query wheel metadata
+const PYPI_PACKAGES_METADATA_ORIGIN: &str = "https://files.pythonhosted.org/packages";
+
 /// Routing decision returned by a `classify` closure in [`simple_intel`].
 pub enum RouteAction {
     /// Return 404 without consulting S3 or upstream.
@@ -112,6 +115,18 @@ pub fn simple_intel(
     route: &'static str,
     classify: impl Fn(&Config, &str) -> RouteAction + Clone + Send + 'static,
 ) -> Route {
+    simple_intel_with_path_origin(
+        move |endpoints, _path| origin_injection(endpoints).to_string(),
+        route,
+        classify,
+    )
+}
+
+fn simple_intel_with_path_origin(
+    origin_injection: impl Fn(&Endpoints, &str) -> String + Clone + Send + Sync + 'static,
+    route: &'static str,
+    classify: impl Fn(&Config, &str) -> RouteAction + Clone + Send + 'static,
+) -> Route {
     let handler = move |path: IntelPath,
                         method: Method,
                         uri: Uri,
@@ -120,8 +135,8 @@ pub fn simple_intel(
         let origin_injection = origin_injection.clone();
         let classify = classify.clone();
         async move {
-            let origin = origin_injection(&config.endpoints).to_string();
             let path = path.to_string();
+            let origin = origin_injection(&config.endpoints, &path);
             let action = classify(&config, &path);
             simple_intel_response(
                 SimpleRequest {
@@ -142,6 +157,14 @@ pub fn simple_intel(
     web::route()
         .guard(guard::Any(guard::Get()).or(guard::Head()))
         .to(handler)
+}
+
+fn pypi_packages_origin(endpoints: &Endpoints, path: &str) -> String {
+    if path.ends_with(".metadata") {
+        PYPI_PACKAGES_METADATA_ORIGIN.to_string()
+    } else {
+        endpoints.pypi_packages.clone()
+    }
 }
 
 /// Classify every path as [`RouteAction::Cache`].
@@ -423,7 +446,11 @@ pub fn configure_repo_routes(config: &mut web::ServiceConfig) {
         )
         .route(
             "/pypi-packages/{path:.+}",
-            simple_intel(|c| &c.pypi_packages, "pypi-packages", classify_cache_all),
+            simple_intel_with_path_origin(
+                pypi_packages_origin,
+                "pypi-packages",
+                classify_cache_all,
+            ),
         )
         .route(
             "/homebrew-bottles/{path:.+}",
@@ -797,6 +824,12 @@ mod tests {
             .merge(Toml::file(crate::common::rocket_toml_path()).nested());
         let mut config: Config = figment.extract().expect("config");
         config.read_only = true;
+        config.endpoints.pypi_packages = format!("{}/pypi/packages", server.base_url());
+        config.endpoints.overrides.push(EndpointOverride {
+            name: "pythonhosted-test".to_string(),
+            pattern: PYPI_PACKAGES_METADATA_ORIGIN.to_string(),
+            replace: format!("{}/pythonhosted/packages", server.base_url()),
+        });
         config.endpoints.pytorch_wheels = format!("{}/whl", server.base_url());
         let config = Arc::new(config);
 
@@ -829,6 +862,14 @@ mod tests {
                         ctx.head().uri.query() == Some("mirror_intel_list")
                     }))
                     .to(list),
+            )
+            .route(
+                "/pypi-packages/{path:.+}",
+                simple_intel_with_path_origin(
+                    pypi_packages_origin,
+                    "pypi-packages",
+                    classify_cache_all,
+                ),
             )
             .service(pypi_index_scope(
                 "pytorch-wheels",
@@ -944,6 +985,76 @@ mod tests {
             resp.headers().get("Location").unwrap().to_str().unwrap(),
             expected_location_injection(&object, &config).as_str()
         );
+    }
+
+    #[serial(cwd_env)]
+    #[tokio::test]
+    async fn pypi_package_routes_choose_origins_by_metadata_suffix() {
+        let (service, config, mut rx, server) = make_service().await;
+        let metadata_path = "ab/example-1.0-py3-none-any.whl.metadata";
+        let wheel_path = "ab/example-1.0-py3-none-any.whl";
+
+        let metadata_head = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path(format!("/pythonhosted/packages/{metadata_path}"));
+                then.status(200);
+            })
+            .await;
+        let wrong_normal_sidecar_head = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path(format!("/pypi/packages/{metadata_path}"));
+                then.status(200);
+            })
+            .await;
+        let wheel_head = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path(format!("/pypi/packages/{wheel_path}"));
+                then.status(200);
+            })
+            .await;
+        let wrong_metadata_wheel_head = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD)
+                    .path(format!("/pythonhosted/packages/{wheel_path}"));
+                then.status(200);
+            })
+            .await;
+
+        let req = TestRequest::get()
+            .uri(&format!("/pypi-packages/{metadata_path}"))
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::FOUND);
+        assert_eq!(
+            resp.headers().get("Location").unwrap().to_str().unwrap(),
+            format!("{PYPI_PACKAGES_METADATA_ORIGIN}/{metadata_path}")
+        );
+        let task = rx.recv().await.unwrap();
+        assert_eq!(task.storage, "pypi-packages");
+        assert_eq!(task.origin, PYPI_PACKAGES_METADATA_ORIGIN);
+        assert_eq!(task.path, metadata_path);
+
+        let req = TestRequest::get()
+            .uri(&format!("/pypi-packages/{wheel_path}"))
+            .to_request();
+        let resp = call_service(&service, req).await;
+        assert_eq!(resp.status(), StatusCode::FOUND);
+        assert_eq!(
+            resp.headers().get("Location").unwrap().to_str().unwrap(),
+            format!("{}/{wheel_path}", config.endpoints.pypi_packages)
+        );
+        let task = rx.recv().await.unwrap();
+        assert_eq!(task.storage, "pypi-packages");
+        assert_eq!(task.origin, config.endpoints.pypi_packages);
+        assert_eq!(task.path, wheel_path);
+
+        metadata_head.assert_calls_async(1).await;
+        wrong_normal_sidecar_head.assert_calls_async(0).await;
+        wheel_head.assert_calls_async(1).await;
+        wrong_metadata_wheel_head.assert_calls_async(0).await;
     }
 
     fn is_index_for(name: &str) -> impl FnOnce(&str) + '_ {
@@ -1192,6 +1303,27 @@ mod tests {
             "flutter/fonts/03bdd42a57aff5c496859f38d29825843d7fe68e/fonts.zip",
         ));
         assert!(!flutter_allow(&config, "flutter/coverage/lcov.info"));
+    }
+
+    #[test]
+    fn pypi_package_origin_selects_all_metadata_sidecars() {
+        let endpoints = Endpoints {
+            pypi_packages: "https://packages.example".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            pypi_packages_origin(&endpoints, "example-1.0-py3-none-any.whl.metadata"),
+            PYPI_PACKAGES_METADATA_ORIGIN
+        );
+        assert_eq!(
+            pypi_packages_origin(&endpoints, "example-1.0.tar.gz.metadata"),
+            PYPI_PACKAGES_METADATA_ORIGIN
+        );
+        assert_eq!(
+            pypi_packages_origin(&endpoints, "example-1.0-py3-none-any.whl"),
+            endpoints.pypi_packages
+        );
     }
 
     #[test]
