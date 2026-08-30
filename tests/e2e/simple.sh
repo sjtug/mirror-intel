@@ -268,6 +268,66 @@ assert-status GET "$base_url/pytorch-wheels/cu130/torch/" 200
 assert-body-contains "$base_url/pytorch-wheels/cu130/torch/" "Links for cu130 torch"
 assert-status HEAD "$base_url/pytorch-wheels/cu130/torch/" 200
 
+# PyPI artifact links in generated indexes preserve the Core Metadata
+# advertisement after rewriting to /pypi-packages. The derived sidecar URL
+# must therefore use files.pythonhosted, cache under pypi-packages, and serve
+# bytes matching the advertised metadata hash.
+pypi_wheel_path="ab/cd/filelock-3.0.12-py3-none-any.whl"
+pypi_project_html="$(curl --silent --show-error --fail "$base_url/pytorch-wheels/filelock/")"
+rewritten_url="$(
+	printf '%s' "$pypi_project_html" |
+		sed --quiet --expression 's/.*href="\([^"#]*\)#sha256=[^"]*".*/\1/p'
+)"
+advertised_metadata_sha256="$(
+	printf '%s' "$pypi_project_html" |
+		sed --quiet --expression 's/.*data-core-metadata="sha256=\([0-9a-f]\{64\}\)".*/\1/p'
+)"
+if test "$rewritten_url" != "/pypi-packages/$pypi_wheel_path"; then
+	echo "FAIL generated PyPI wheel URL was not rewritten: actual=$rewritten_url" >&2
+	exit 1
+fi
+if test -z "$advertised_metadata_sha256"; then
+	echo "FAIL generated PyPI wheel did not advertise hashed Core Metadata" >&2
+	exit 1
+fi
+pypi_metadata_path="${pypi_wheel_path}.metadata"
+derived_metadata_url="${rewritten_url}.metadata"
+assert-status-location \
+	GET \
+	"${base_url}${derived_metadata_url}" \
+	302 \
+	"https://files.pythonhosted.org/packages/$pypi_metadata_path"
+assert-upstream-count HEAD "/pythonhosted/packages/$pypi_metadata_path" 1
+assert-upstream-count HEAD "/pypi/packages/$pypi_metadata_path" 0
+wait-for-body-contains \
+	"$s3_url/bucket/pypi-packages/$pypi_metadata_path" \
+	"Name: filelock"
+pypi_metadata_file="$(mktemp)"
+curl --silent --show-error --fail \
+	--output "$pypi_metadata_file" \
+	"${base_url}${derived_metadata_url}"
+actual_metadata_sha256="$(sha256sum "$pypi_metadata_file" | cut --delimiter ' ' --fields 1)"
+rm -f "$pypi_metadata_file"
+if test "$actual_metadata_sha256" != "$advertised_metadata_sha256"; then
+	echo "FAIL cached Core Metadata hash: expected=$advertised_metadata_sha256 actual=$actual_metadata_sha256" >&2
+	exit 1
+fi
+assert-upstream-count GET "/pythonhosted/packages/$pypi_metadata_path" 1
+assert-upstream-count GET "/pypi/packages/$pypi_metadata_path" 0
+
+# An ordinary PyPI wheel keeps using the configured package mirror while
+# sharing the same pypi-packages S3 prefix.
+assert-status-location \
+	GET \
+	"$base_url/pypi-packages/$pypi_wheel_path" \
+	302 \
+	"$upstream_url/pypi/packages/$pypi_wheel_path"
+assert-upstream-count HEAD "/pypi/packages/$pypi_wheel_path" 1
+assert-upstream-count HEAD "/pythonhosted/packages/$pypi_wheel_path" 0
+wait-for-body-contains \
+	"$s3_url/bucket/pypi-packages/$pypi_wheel_path" \
+	"ordinary pypi wheel fixture"
+
 # Index misses are S3-authoritative and never probe or cache an upstream page.
 assert-status GET "$base_url/pytorch-wheels/missing-cache-path/" 404
 assert-upstream-count HEAD "/whl/missing-cache-path" 0
@@ -283,6 +343,14 @@ assert-upstream-count HEAD "/whl/torch-0.0.1.whl" 1
 wait-for-body-contains \
 	"$s3_url/bucket/pytorch-wheels/torch-0.0.1.whl" \
 	"wheel cache fixture"
+assert-status-location \
+	GET \
+	"$base_url/pytorch-wheels/torch-0.0.1.whl.metadata" \
+	302 \
+	"$upstream_url/whl/torch-0.0.1.whl.metadata"
+wait-for-body-contains \
+	"$s3_url/bucket/pytorch-wheels/torch-0.0.1.whl.metadata" \
+	"native pytorch metadata fixture"
 
 # Redirect-classified paths remain unconditional upstream redirects.
 assert-status-location \
@@ -331,6 +399,14 @@ assert-upstream-count HEAD "/astral/artifacts/flash-attn.whl" 1
 wait-for-body-contains \
 	"$s3_url/bucket/astral-wheels/artifacts/flash-attn.whl" \
 	"astral wheel fixture"
+assert-status-location \
+	GET \
+	"$base_url/astral-wheels/artifacts/flash-attn.whl.metadata" \
+	302 \
+	"$upstream_url/astral/artifacts/flash-attn.whl.metadata"
+wait-for-body-contains \
+	"$s3_url/bucket/astral-wheels/artifacts/flash-attn.whl.metadata" \
+	"native astral metadata fixture"
 
 assert-status GET "$base_url/nix-channels/store/nix-cache-info" 200
 assert-body-contains "$base_url/nix-channels/store/nix-cache-info" "StoreDir: /nix/store"

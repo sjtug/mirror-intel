@@ -2,6 +2,7 @@
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
+import hashlib
 import signal
 import sys
 import threading
@@ -24,6 +25,30 @@ UPSTREAM_CU130_TORCH = (
 )
 UPSTREAM_TORCH_STABLE = b"legacy torch_stable.html find-links fixture"
 UPSTREAM_ONLY = b"upstream-only cache fixture"
+PYPI_WHEEL_PATH = "ab/cd/filelock-3.0.12-py3-none-any.whl"
+PYPI_WHEEL = b"ordinary pypi wheel fixture"
+PYPI_METADATA = b"Metadata-Version: 2.1\nName: filelock\nVersion: 3.0.12\n"
+PYPI_WHEEL_SHA256 = hashlib.sha256(PYPI_WHEEL).hexdigest()
+PYPI_METADATA_SHA256 = hashlib.sha256(PYPI_METADATA).hexdigest()
+PYPI_PROJECT_HTML = (
+    b'<!DOCTYPE html><h1>Links for filelock</h1><a href="/pypi-packages/'
+    + PYPI_WHEEL_PATH.encode()
+    + b"#sha256="
+    + PYPI_WHEEL_SHA256.encode()
+    + b'" data-core-metadata="sha256='
+    + PYPI_METADATA_SHA256.encode()
+    + b'">filelock-3.0.12-py3-none-any.whl</a>'
+)
+PYPI_PROJECT_JSON = (
+    b'{"meta":{"api-version":"1.1"},"name":"filelock","versions":["3.0.12"],'
+    b'"files":[{"filename":"filelock-3.0.12-py3-none-any.whl","url":"/pypi-packages/'
+    + PYPI_WHEEL_PATH.encode()
+    + b'","hashes":{"sha256":"'
+    + PYPI_WHEEL_SHA256.encode()
+    + b'"},"core-metadata":{"sha256":"'
+    + PYPI_METADATA_SHA256.encode()
+    + b'"}}]}'
+)
 
 objects = {
     "pytorch-wheels/simple/index.v1_html": (
@@ -50,6 +75,8 @@ objects = {
     "pytorch-wheels/simple/cu130/torch/index.v1_json": (
         b'{"meta":{"api-version":"1.1"},"name":"torch","versions":[],"files":[]}'
     ),
+    "pytorch-wheels/simple/filelock/index.v1_html": PYPI_PROJECT_HTML,
+    "pytorch-wheels/simple/filelock/index.v1_json": PYPI_PROJECT_JSON,
     "astral-wheels/simple/cpu/index.v1_html": (
         b'<!DOCTYPE html><a href="pyg-lib/">pyg-lib</a>'
     ),
@@ -125,9 +152,21 @@ class UpstreamHandler(QuietHandler):
         elif path == "/whl/torch-0.0.1.whl":
             record_upstream_request(self.command, path)
             self.send_bytes(200, b"wheel cache fixture", {"Content-Type": "application/octet-stream"})
+        elif path == "/whl/torch-0.0.1.whl.metadata":
+            record_upstream_request(self.command, path)
+            self.send_bytes(200, b"native pytorch metadata fixture", {"Content-Type": "text/plain"})
         elif path == "/astral/artifacts/flash-attn.whl":
             record_upstream_request(self.command, path)
             self.send_bytes(200, b"astral wheel fixture", {"Content-Type": "application/octet-stream"})
+        elif path == "/astral/artifacts/flash-attn.whl.metadata":
+            record_upstream_request(self.command, path)
+            self.send_bytes(200, b"native astral metadata fixture", {"Content-Type": "text/plain"})
+        elif path == f"/pypi/packages/{PYPI_WHEEL_PATH}":
+            record_upstream_request(self.command, path)
+            self.send_bytes(200, PYPI_WHEEL, {"Content-Type": "application/octet-stream"})
+        elif path == f"/pythonhosted/packages/{PYPI_WHEEL_PATH}.metadata":
+            record_upstream_request(self.command, path)
+            self.send_bytes(200, PYPI_METADATA, {"Content-Type": "text/plain"})
         else:
             record_upstream_request(self.command, path)
             self.send_bytes(404, b"not found")
