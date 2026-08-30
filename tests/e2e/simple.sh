@@ -293,7 +293,21 @@ assert-status-location \
 assert-upstream-count HEAD "/whl/missing-redirect.tar.gz" 0
 assert-upstream-count GET "/whl/missing-redirect.tar.gz" 0
 
-# Legacy find-links HTML pages are not served or fetched from upstream.
+# Preserve the exact historical torch_stable.html behavior without reopening
+# dynamic proxying for arbitrary legacy HTML pages.
+assert-body-contains \
+	"$base_url/pytorch-wheels/torch_stable.html" \
+	"legacy torch_stable.html find-links fixture"
+assert-upstream-count GET "/whl/torch_stable.html" 1
+assert-status HEAD "$base_url/pytorch-wheels/torch_stable.html" 200
+assert-upstream-count HEAD "/whl/torch_stable.html" 0
+assert-status-location \
+	GET \
+	"$base_url/pytorch-wheels/torch_stable.html?legacy=1" \
+	302 \
+	"$upstream_url/whl/torch_stable.html?legacy=1"
+assert-upstream-count GET "/whl/torch_stable.html" 1
+
 assert-status HEAD "$base_url/pytorch-wheels/missing-proxy.html" 404
 assert-status GET "$base_url/pytorch-wheels/missing-proxy.html?legacy=1" 404
 assert-upstream-count HEAD "/whl/missing-proxy.html" 0
