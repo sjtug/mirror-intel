@@ -18,7 +18,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Nix
-        uses: cachix/install-nix-action@51f3067b56fe8ae331890c77d4e454f6d60615ff # v31
+        uses: cachix/install-nix-action@ab739621df7a23f52766f9ccc97f38da6b7af14f # v31
         with:
           extra_nix_config: |
             keep-env-derivations = true
@@ -36,7 +36,7 @@ jobs:
           purge-primary-key: never
       - name: Build mirror-intel
         run: nix build -Lv
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mirror-intel-release
           path: result/bin/mirror-intel
